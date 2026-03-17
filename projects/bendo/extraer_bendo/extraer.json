@@ -1,5 +1,14 @@
 {
   "columna_psv": "id_establecimiento",
   "placeholder_sql": "rucs_a_buscar",
-  "consultas": {}
+  "consultas": {
+    "facturacion.sql": {
+      "prefijo_salida": "facturacion",
+      "regex_sufijo": "\\d{4}_\\d{2}"
+    },
+    "contactabilidad.sql": {
+      "prefijo_salida": "contactabilidad",
+      "regex_sufijo": ""
+    }
+  }
 }
