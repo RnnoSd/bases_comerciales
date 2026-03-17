@@ -8,6 +8,7 @@ for y in range(2025, 2025)
           \ '  CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,',
           \ '  CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,',
           \ '  DATE_FORMAT(fecha, "%Y/%m") AS periodo,',
+          \ '  clave_acceso,',
           \ '  total',
           \ 'FROM df_data_general_facturas_' . y . '_' . printf("%02d;", m),
           \ ''
