@@ -20,3 +20,10 @@ Thumbs.db
 .venv/
 venv/
 env/
+
+# =========================
+# Poetry / build artifacts
+# =========================
+*.egg-info/
+dist/
+poetry.lock

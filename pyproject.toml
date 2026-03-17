@@ -1,0 +1,25 @@
+[project]
+name = "bases-comerciales"
+version = "0.1.0"
+description = "Proyecto para consolidar bases comerciales"
+authors = [{name = "Renato"}, {name = "Leo"}]
+requires-python = ">=3.9"
+dependencies = [
+    "rich",
+    "polars",
+    "python-dotenv",
+    "mysql-connector-python",
+    "sqlparse",
+]
+
+[tool.poetry]
+packages = [
+    {include = "extraer", from = "tools/extraer/src"},
+]
+
+[project.scripts]
+extraer = "extraer.cli:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
