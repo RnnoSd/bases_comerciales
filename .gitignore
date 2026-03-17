@@ -1,0 +1,22 @@
+# =========================
+# Datos e información generada por proyectos
+# =========================
+projects/*/data/
+projects/*/output/
+
+# =========================
+# Archivos temporales y sistema
+# =========================
+*.tmp
+*.log
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+
+# =========================
+# Entornos virtuales
+# =========================
+.venv/
+venv/
+env/

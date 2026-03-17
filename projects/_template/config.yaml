@@ -1,0 +1,16 @@
+# Configuración del proyecto
+# Copiar _template/ y renombrar para crear un nuevo proyecto
+
+project:
+  name: ""
+  description: ""
+  created: ""
+
+sources: []
+  # - name: ""
+  #   type: ""  # query | api | file
+  #   connection: ""
+
+output:
+  format: ""  # csv | parquet | xlsx
+  destination: ""
