@@ -73,6 +73,7 @@ if __name__ == "__main__":
         Path(__file__).resolve().parent.parent / "bases" / "base_consolidada.parquet"
     )
     df_final = consolidar(carpeta)
+    df_final.write_parquet(RUTA_base_consolidada)
     console.print(
         f"Se ha guardado la consolidación en: {RUTA_base_consolidada.resolve()}"
     )
