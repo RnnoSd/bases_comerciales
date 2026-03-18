@@ -94,8 +94,9 @@ def parse_args():
     traer_parser.add_argument(
         "--sql",
         type=str,
-        required=True,
-        help="Nombre del archivo .sql dentro de sql/ a ejecutar",
+        required=False,
+        default=None,
+        help="Nombre del archivo .sql a ejecutar. Si se omite, ejecuta todas las consultas configuradas en extraer.json secuencialmente",
     )
     traer_parser.add_argument(
         "--ruta-credenciales",

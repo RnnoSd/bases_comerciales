@@ -2,10 +2,10 @@ from rich.console import Console
 import polars as pl
 from pathlib import Path
 from typing import Dict, List, Any
+from decimal import Decimal
 from dotenv import load_dotenv
 from contextlib import closing
 from mysql.connector import ProgrammingError
-from concurrent.futures import ProcessPoolExecutor, as_completed
 import mysql.connector, os, sqlparse, re, shutil
 from importlib.resources import files, as_file
 
@@ -61,6 +61,10 @@ def guardar_resultados(
         if not rows:
             break
         columnas = [desc[0] for desc in cur.description]
+        rows = [
+            tuple(float(v) if isinstance(v, Decimal) else v for v in fila)
+            for fila in rows
+        ]
         df_polars = pl.LazyFrame(rows, schema=columnas, orient="row")
         df_polars.sink_parquet(
             RUTA_backups / f"{nombre}_{i}.parquet",
@@ -91,15 +95,11 @@ def guardar_resultados(
     )
 
 
-def procesar_query(
-    ruta_credenciales: Path,
-    query: str,
-    RUTA_backups: Path,
-    prefijo_salida: str,
-    regex_sufijo: str,
-    indice: int,
-) -> int:
-    console = Console()
+def _es_query_datos(query: str) -> bool:
+    return query.strip().upper().startswith("SELECT")
+
+
+def _crear_conexion(ruta_credenciales: Path) -> mysql.connector.MySQLConnection:
     load_dotenv(ruta_credenciales, override=True)
     user = os.getenv("USER_DATABASE")
     password = os.getenv("PASSWORD_DATABASE")
@@ -110,9 +110,20 @@ def procesar_query(
         raise ValueError(
             "No se ha encontrado una de las siguientes variables de entorno: `user`, `password`, `host`, `database`, `port`."
         )
-    conexion = mysql.connector.connect(
+    return mysql.connector.connect(
         host=host, user=user, password=password, database=database, port=port
     )
+
+
+def procesar_query(
+    conexion: mysql.connector.MySQLConnection,
+    query: str,
+    RUTA_backups: Path,
+    prefijo_salida: str,
+    regex_sufijo: str,
+    indice: int,
+) -> int:
+    console = Console()
 
     if regex_sufijo:
         match = re.search(regex_sufijo, query)
@@ -123,12 +134,11 @@ def procesar_query(
     nombre = f"{prefijo_salida}_{sufijo}"
 
     with console.status(f"{nombre}") as status:
-        with closing(conexion) as conn:
-            with conn.cursor() as cur:
-                guardar_resultados(
-                    cur=cur, nombre=nombre, query=query, RUTA_backups=RUTA_backups
-                )
-            status.update(f"Se ha procesado {nombre}")
+        with conexion.cursor() as cur:
+            guardar_resultados(
+                cur=cur, nombre=nombre, query=query, RUTA_backups=RUTA_backups
+            )
+        status.update(f"Se ha procesado {nombre}")
     return 0
 
 
@@ -142,8 +152,9 @@ def leer_y_guardar_datos_mysql(
     regex_sufijo: str = "",
     param_verbose: bool = False,
 ):
-    if ruta_backups.exists():
-        shutil.rmtree(ruta_backups)
+    ruta_backups.mkdir(parents=True, exist_ok=True)
+    for archivo in ruta_backups.glob(f"{prefijo_salida}*"):
+        archivo.unlink()
     console = Console()
     valores_sql = ",".join(
         [v for v in valores_busqueda if v is not None]
@@ -178,22 +189,23 @@ def leer_y_guardar_datos_mysql(
             )
             console.print(f"Una query de ejemplo es:\n{dummy_query}")
 
-        with ProcessPoolExecutor(max_workers=4) as executor:
-            futures = [
-                executor.submit(
-                    procesar_query,
-                    ruta_credenciales,
-                    query,
-                    ruta_backups,
-                    prefijo_salida,
-                    regex_sufijo,
-                    i,
-                )
-                for i, query in enumerate(queries)
-            ]
-
-            for future in as_completed(futures):
-                console.print(future.result())
+        with closing(_crear_conexion(ruta_credenciales)) as conexion:
+            indice_datos = 0
+            for query in queries:
+                if _es_query_datos(query):
+                    procesar_query(
+                        conexion=conexion,
+                        query=query,
+                        RUTA_backups=ruta_backups,
+                        prefijo_salida=prefijo_salida,
+                        regex_sufijo=regex_sufijo,
+                        indice=indice_datos,
+                    )
+                    indice_datos += 1
+                else:
+                    with conexion.cursor() as cur:
+                        cur.execute(query)
+                    console.print(f"[dim] Ejecutado: {query[:60]}...[/dim]")
 
     except ProgrammingError as e:
         console.print(f"[red] El motor de MySQL reporta el siguiente error:\n{e}")
