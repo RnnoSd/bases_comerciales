@@ -1,1 +1,3 @@
 extraer_bendo/backups/
+bases/*
+!bases/.gitkeep
