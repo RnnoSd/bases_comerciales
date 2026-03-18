@@ -9,6 +9,14 @@
     "contactabilidad.sql": {
       "prefijo_salida": "contactabilidad",
       "regex_sufijo": ""
+    },
+    "informacion_general.sql": {
+      "prefijo_salida": "informacion_general",
+      "regex_sufijo": ""
+    },
+    "balances.sql": {
+      "prefijo_salida": "balances",
+      "regex_sufijo": ""
     }
   }
 }

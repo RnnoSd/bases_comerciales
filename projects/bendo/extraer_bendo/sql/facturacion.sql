@@ -1,136 +1,141 @@
 
--- CREATE TEMPORARY TABLE temp_rucs_no_aceptados_union AS 
--- WITH rucs_no_aceptados_bases_catastros AS (
---   SELECT 
---     DISTINCT ruc AS numero_ruc 
---   FROM base_catastro_grandes_contribuyentes
--- 
---   UNION ALL
--- 
---   SELECT 
---     DISTINCT ruc AS numero_ruc
---   FROM base_catastro_empresas_fantasma
--- ),
--- rucs_no_aceptados_estados_base_rucs_sri AS (
---   SELECT
---     DISTINCT numero_ruc
---   FROM base_rucs_sri
---   WHERE cod_estado_contribuyente NOT IN ("ACTIVO")
--- )
--- SELECT numero_ruc
--- FROM rucs_no_aceptados_estados_base_rucs_sri
--- 
--- UNION ALL
--- 
--- SELECT numero_ruc
--- FROM rucs_no_aceptados_bases_catastros;
-
-
 SELECT
-  CAST(ruc_vendedor AS UNSIGNED) AS numero_ruc,
+  CAST(ruc AS UNSIGNED) AS numero_ruc,
   CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,
   CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,
-  DATE_FORMAT(fecha, "%Y/%m") AS periodo,
-  clave_acceso,
-  total
-FROM df_data_general_facturas_2025_01 LIMIT 10;
+  "2025/01" AS periodo,
+  numero_facturas,
+  total_facturas,
+  ticket_promedio
+FROM df_resumen_tendencias_establecimiento_2025_01;
 
 SELECT
-  CAST(ruc_vendedor AS UNSIGNED) AS numero_ruc,
+  CAST(ruc AS UNSIGNED) AS numero_ruc,
   CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,
   CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,
-  DATE_FORMAT(fecha, "%Y/%m") AS periodo,
-  clave_acceso,
-  total
-FROM df_data_general_facturas_2025_02;
+  "2025/02" AS periodo,
+  numero_facturas,
+  total_facturas,
+  ticket_promedio
+FROM df_resumen_tendencias_establecimiento_2025_02;
 
 SELECT
-  CAST(ruc_vendedor AS UNSIGNED) AS numero_ruc,
+  CAST(ruc AS UNSIGNED) AS numero_ruc,
   CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,
   CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,
-  DATE_FORMAT(fecha, "%Y/%m") AS periodo,
-  clave_acceso,
-  total
-FROM df_data_general_facturas_2025_03;
+  "2025/03" AS periodo,
+  numero_facturas,
+  total_facturas,
+  ticket_promedio
+FROM df_resumen_tendencias_establecimiento_2025_03;
 
 SELECT
-  CAST(ruc_vendedor AS UNSIGNED) AS numero_ruc,
+  CAST(ruc AS UNSIGNED) AS numero_ruc,
   CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,
   CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,
-  DATE_FORMAT(fecha, "%Y/%m") AS periodo,
-  clave_acceso,
-  total
-FROM df_data_general_facturas_2025_04;
+  "2025/04" AS periodo,
+  numero_facturas,
+  total_facturas,
+  ticket_promedio
+FROM df_resumen_tendencias_establecimiento_2025_04;
 
 SELECT
-  CAST(ruc_vendedor AS UNSIGNED) AS numero_ruc,
+  CAST(ruc AS UNSIGNED) AS numero_ruc,
   CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,
   CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,
-  DATE_FORMAT(fecha, "%Y/%m") AS periodo,
-  clave_acceso,
-  total
-FROM df_data_general_facturas_2025_05;
+  "2025/05" AS periodo,
+  numero_facturas,
+  total_facturas,
+  ticket_promedio
+FROM df_resumen_tendencias_establecimiento_2025_05;
 
 SELECT
-  CAST(ruc_vendedor AS UNSIGNED) AS numero_ruc,
+  CAST(ruc AS UNSIGNED) AS numero_ruc,
   CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,
   CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,
-  DATE_FORMAT(fecha, "%Y/%m") AS periodo,
-  clave_acceso,
-  total
-FROM df_data_general_facturas_2025_06;
+  "2025/06" AS periodo,
+  numero_facturas,
+  total_facturas,
+  ticket_promedio
+FROM df_resumen_tendencias_establecimiento_2025_06;
 
 SELECT
-  CAST(ruc_vendedor AS UNSIGNED) AS numero_ruc,
+  CAST(ruc AS UNSIGNED) AS numero_ruc,
   CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,
   CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,
-  DATE_FORMAT(fecha, "%Y/%m") AS periodo,
-  clave_acceso,
-  total
-FROM df_data_general_facturas_2025_07;
+  "2025/07" AS periodo,
+  numero_facturas,
+  total_facturas,
+  ticket_promedio
+FROM df_resumen_tendencias_establecimiento_2025_07;
 
 SELECT
-  CAST(ruc_vendedor AS UNSIGNED) AS numero_ruc,
+  CAST(ruc AS UNSIGNED) AS numero_ruc,
   CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,
   CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,
-  DATE_FORMAT(fecha, "%Y/%m") AS periodo,
-  clave_acceso,
-  total
-FROM df_data_general_facturas_2025_08;
+  "2025/08" AS periodo,
+  numero_facturas,
+  total_facturas,
+  ticket_promedio
+FROM df_resumen_tendencias_establecimiento_2025_08;
 
 SELECT
-  CAST(ruc_vendedor AS UNSIGNED) AS numero_ruc,
+  CAST(ruc AS UNSIGNED) AS numero_ruc,
   CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,
   CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,
-  DATE_FORMAT(fecha, "%Y/%m") AS periodo,
-  clave_acceso,
-  total
-FROM df_data_general_facturas_2025_09;
+  "2025/09" AS periodo,
+  numero_facturas,
+  total_facturas,
+  ticket_promedio
+FROM df_resumen_tendencias_establecimiento_2025_09;
 
 SELECT
-  CAST(ruc_vendedor AS UNSIGNED) AS numero_ruc,
+  CAST(ruc AS UNSIGNED) AS numero_ruc,
   CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,
   CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,
-  DATE_FORMAT(fecha, "%Y/%m") AS periodo,
-  clave_acceso,
-  total
-FROM df_data_general_facturas_2025_10;
+  "2025/10" AS periodo,
+  numero_facturas,
+  total_facturas,
+  ticket_promedio
+FROM df_resumen_tendencias_establecimiento_2025_10;
 
 SELECT
-  CAST(ruc_vendedor AS UNSIGNED) AS numero_ruc,
+  CAST(ruc AS UNSIGNED) AS numero_ruc,
   CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,
   CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,
-  DATE_FORMAT(fecha, "%Y/%m") AS periodo,
-  clave_acceso,
-  total
-FROM df_data_general_facturas_2025_11;
+  "2025/11" AS periodo,
+  numero_facturas,
+  total_facturas,
+  ticket_promedio
+FROM df_resumen_tendencias_establecimiento_2025_11;
 
 SELECT
-  CAST(ruc_vendedor AS UNSIGNED) AS numero_ruc,
+  CAST(ruc AS UNSIGNED) AS numero_ruc,
   CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,
   CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,
-  DATE_FORMAT(fecha, "%Y/%m") AS periodo,
-  clave_acceso,
-  total
-FROM df_data_general_facturas_2025_12;
+  "2025/12" AS periodo,
+  numero_facturas,
+  total_facturas,
+  ticket_promedio
+FROM df_resumen_tendencias_establecimiento_2025_12;
+
+SELECT
+  CAST(ruc AS UNSIGNED) AS numero_ruc,
+  CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,
+  CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,
+  "2026/01" AS periodo,
+  numero_facturas,
+  total_facturas,
+  ticket_promedio
+FROM df_resumen_tendencias_establecimiento_2026_01;
+
+SELECT
+  CAST(ruc AS UNSIGNED) AS numero_ruc,
+  CAST(codigo_establecimiento AS UNSIGNED) AS codigo_establecimiento,
+  CAST(id_establecimiento AS UNSIGNED) AS id_establecimiento,
+  "2026/02" AS periodo,
+  numero_facturas,
+  total_facturas,
+  ticket_promedio
+FROM df_resumen_tendencias_establecimiento_2026_02;
 
