@@ -10,6 +10,7 @@ dependencies = [
     "python-dotenv",
     "mysql-connector-python",
     "sqlparse",
+    "openpyxl",
 ]
 
 [tool.poetry]
