@@ -640,6 +640,77 @@ def generar_reporte():
         fmt=[None, "#,##0", "0.0%", None, None],
     )
 
+    # ── SECCIÓN 6: ACTIVIDADES POR CANTÓN (QUITO, GUAYAQUIL, CUENCA, OTROS) ──
+    CANTONES_PRINCIPALES = ["QUITO", "GUAYAQUIL", "CUENCA"]
+    NCOLS_CANT = 5
+    r += 3
+    write_title(ws, r, 1, "6. BASE FILTRADA - TIPO DE ACTIVIDAD POR CANTON", NCOLS_CANT)
+    r += 1
+
+    # Agrupar cantón: Quito, Guayaquil, Cuenca, Otros
+    df_filt_canton = df_filt.with_columns(
+        pl.when(pl.col("canton").is_in(CANTONES_PRINCIPALES))
+        .then(pl.col("canton"))
+        .otherwise(pl.lit("OTROS"))
+        .alias("canton_grupo")
+    )
+
+    # Contar establecimientos por tipo_actividad y canton_grupo
+    cant_act = (
+        df_filt_canton.group_by(["tipo_actividad", "canton_grupo"])
+        .agg(pl.col("id_establecimiento").n_unique().alias("n_est"))
+    )
+    # Total por canton_grupo para calcular %
+    cant_total = df_filt_canton.group_by("canton_grupo").agg(
+        pl.col("id_establecimiento").n_unique().alias("total_canton")
+    )
+
+    # Pivotar: tipo_actividad como filas, cantones como columnas
+    pivot_cant = cant_act.pivot(
+        on="canton_grupo", index="tipo_actividad", values="n_est",
+    ).sort(
+        pl.sum_horizontal([pl.col(c) for c in CANTONES_PRINCIPALES + ["OTROS"] if c in cant_act["canton_grupo"].unique().to_list()]),
+        descending=True,
+    )
+
+    # Totales por cantón
+    totals = {row["canton_grupo"]: row["total_canton"] for row in cant_total.iter_rows(named=True)}
+    cant_cols = [c for c in CANTONES_PRINCIPALES + ["OTROS"] if c in pivot_cant.columns]
+
+    # Ordenar tipos de actividad por total descendente
+    tipos_ordered = pivot_cant["tipo_actividad"].to_list()
+
+    # Transpuesta: filas = ciudades, columnas = tipos de actividad
+    ncols_s6 = len(tipos_ordered) + 1
+    write_headers(ws, r, ["Canton"] + tipos_ordered)
+    r += 1
+
+    for c in cant_cols:
+        total_c = totals.get(c, 1)
+        vals = [c.title()]
+        fmts = [None]
+        for tipo in tipos_ordered:
+            row_data = pivot_cant.filter(pl.col("tipo_actividad") == tipo)
+            n = row_data[c].to_list()[0] if c in row_data.columns and row_data.height > 0 and row_data[c].to_list()[0] is not None else 0
+            vals.append(pct(n, total_c))
+            fmts.append("0.0%")
+        fill = FILL_LIGHT if c != "OTROS" else FILL_WHITE
+        write_row(ws, r, vals, fills=[fill] * ncols_s6, fmt=fmts)
+        r += 1
+
+    # Total fila (establecimientos por cantón)
+    total_vals = ["Total Establ."]
+    for tipo in tipos_ordered:
+        row_data = pivot_cant.filter(pl.col("tipo_actividad") == tipo)
+        n = sum((row_data[c].to_list()[0] or 0) if c in row_data.columns and row_data.height > 0 else 0 for c in cant_cols)
+        total_vals.append(n)
+    write_row(
+        ws, r, total_vals,
+        fills=[FILL_HEADER] * ncols_s6,
+        fonts=[FONT_HEADER] * ncols_s6,
+        fmt=[None] + ["#,##0"] * len(tipos_ordered),
+    )
+
     # ── Ajustar anchos de columna ────────────────────────────────────
     col_widths = [42, 18, 20, 22, 22, 18, 18, 80]
     for i, w in enumerate(col_widths):

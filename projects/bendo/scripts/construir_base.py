@@ -111,6 +111,7 @@ def construir_base_procesada(df: pl.DataFrame) -> pl.DataFrame:
         # Recopilar datos por periodo para calcular precisión e ingreso_estimado
         pl.struct(VARS_FACTURACION).alias("periodos_data"),
         pl.col("periodo").count().alias("num_periodos"),
+        pl.col("ticket_promedio").mean().alias("ticket_promedio"),
     )
 
     # Calcular precisión e ingreso_estimado
