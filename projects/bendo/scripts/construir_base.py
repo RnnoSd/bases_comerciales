@@ -1,6 +1,6 @@
 """
 construir_base.py
-Genera base_procesada.parquet y base_filtrada.parquet a partir de base_consolidada.parquet.
+Genera base_procesada, base_filtrada y base_presentar a partir de base_consolidada.
 Usa ingreso_estimado (con imputación de outliers bajos) para filtrar sociedades.
 Python 3.11 / Polars
 """
@@ -13,6 +13,39 @@ BASE_CONSOLIDADA = BASES_DIR / "base_consolidada.parquet"
 ACTIVIDADES_CSV = BASES_DIR / "actividades_economicas.csv"
 BASE_PROCESADA = BASES_DIR / "base_procesada.parquet"
 BASE_FILTRADA = BASES_DIR / "base_filtrada.parquet"
+BASE_PRESENTAR = BASES_DIR / "base_presentar.parquet"
+
+TIPO_ACTIVIDAD_EXCLUIR = [
+    "CONSTRUCCION",
+    "SERVICIOS PROFESIONALES Y CIENTIFICOS",
+    "ACTIVIDADES INMOBILIARIAS",
+    "ASOCIACIONES Y ORGANIZACIONES",
+    "ELECTRICIDAD, GAS Y AGUA",
+    "ADMINISTRACION PUBLICA",
+    "SERVICIOS ADMINISTRATIVOS Y DE APOYO",
+    "ALQUILER DE BIENES",
+    "MINERIA Y EXTRACCION",
+    "GESTION DE RESIDUOS",
+    "SERVICIOS PERSONALES",
+    "SERVICIOS HOSPITALARIOS",
+]
+
+COLS_PRESENTAR = [
+    "id_establecimiento",
+    "numero_ruc",
+    "numero_establecimiento",
+    "razon_social",
+    "nombre_fantasia_comercial",
+    "clase_contribuyente",
+    "tipo_contribuyente",
+    "actividad_economica",
+    "provincia",
+    "canton",
+    "ticket_promedio",
+    "ingreso_estimado",
+    "tipo_actividad",
+    "descripcion_corta",
+]
 
 VARS_FACTURACION = ["numero_facturas", "total_facturas", "ticket_promedio"]
 TOTAL_PERIODOS = 14
@@ -223,6 +256,21 @@ def construir_base_filtrada(
     return base_filtrada
 
 
+def construir_base_presentar(df_filtrada: pl.DataFrame) -> pl.DataFrame:
+    """
+    Filtra base_filtrada eliminando todos los RUCs cuyo tipo_actividad
+    esté en TIPO_ACTIVIDAD_EXCLUIR y descarta columnas internas
+    (num_periodos, precision).
+    """
+    rucs_excluir = (
+        df_filtrada.filter(pl.col("tipo_actividad").is_in(TIPO_ACTIVIDAD_EXCLUIR))
+        .select("numero_ruc")
+        .unique()
+    )
+    df = df_filtrada.join(rucs_excluir, on="numero_ruc", how="anti")
+    return df.select(COLS_PRESENTAR)
+
+
 def main():
     print("=" * 60)
     print("PIPELINE DE CONSTRUCCIÓN DE BASE COMERCIAL")
@@ -282,6 +330,19 @@ def main():
     df_filtrada.write_parquet(BASE_FILTRADA)
     print(f"  Guardado en {BASE_FILTRADA}")
 
+    # ── Filtro 3: Excluir tipo_actividad no relevante ─────────
+    print("\n── Filtro 3: Excluir tipo_actividad no relevante ──")
+    print(f"  Categorías excluidas: {len(TIPO_ACTIVIDAD_EXCLUIR)}")
+    df_presentar = construir_base_presentar(df_filtrada)
+    est_presentar = df_presentar["id_establecimiento"].n_unique()
+    rucs_presentar = df_presentar["numero_ruc"].n_unique()
+    print(f"  RUCs eliminados: {rucs_filtrada - rucs_presentar:,}")
+    print(f"  Establecimientos que pasan: {est_presentar:,}")
+    print(f"  RUCs que pasan: {rucs_presentar:,}")
+    print(f"  Columnas eliminadas: num_periodos, precision")
+    df_presentar.write_parquet(BASE_PRESENTAR)
+    print(f"  Guardado en {BASE_PRESENTAR}")
+
     # ── Resumen del embudo ───────────────────────────────────
     print("\n" + "=" * 70)
     print("RESUMEN DEL EMBUDO")
@@ -295,9 +356,11 @@ def main():
     print(f"  {'base_procesada.parquet':<42} {df_procesada['numero_ruc'].n_unique():>10,}   {df_procesada.height:>10,}   base_procesada")
     print(f"    ↓ Filtro 2: RIMPE (PN) + Soc. $500K-$5M")
     print(f"  {'base_filtrada.parquet':<42} {rucs_filtrada:>10,}   {est_filtrada:>10,}   base_filtrada")
+    print(f"    ↓ Filtro 3: Excluir tipo_actividad")
+    print(f"  {'base_presentar.parquet':<42} {rucs_presentar:>10,}   {est_presentar:>10,}   base_presentar")
     print(f"  {'-'*42} {'-'*10}   {'-'*10}")
-    pct_rucs = rucs_filtrada / rucs_total * 100
-    pct_est = est_filtrada / est_con_id * 100
+    pct_rucs = rucs_presentar / rucs_total * 100
+    pct_est = est_presentar / est_con_id * 100
     print(f"  {'Tasa de conversion total':<42} {pct_rucs:>9.2f}%   {pct_est:>9.2f}%")
     print("=" * 70)
 
