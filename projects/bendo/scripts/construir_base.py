@@ -1,6 +1,7 @@
 """
 construir_base.py
 Genera base_procesada.parquet y base_filtrada.parquet a partir de base_consolidada.parquet.
+Solo usa ingreso_reportado (total_facturas agregado) para filtrar sociedades.
 Python 3.11 / Polars
 """
 
@@ -14,6 +15,7 @@ BASE_PROCESADA = BASES_DIR / "base_procesada.parquet"
 BASE_FILTRADA = BASES_DIR / "base_filtrada.parquet"
 
 VARS_FACTURACION = ["numero_facturas", "total_facturas", "ticket_promedio"]
+TOTAL_PERIODOS = 14
 
 
 def calcular_mejor_promedio(valores: list[float]) -> float | None:
@@ -77,19 +79,16 @@ def calcular_precision_establecimiento(
 
 
 def construir_base_procesada(df: pl.DataFrame) -> pl.DataFrame:
-    """Construye base_procesada con ingreso_reportado, ingreso_estimado y precision."""
+    """Construye base_procesada con ingreso_reportado, ingreso_imputado y precision.
+    ingreso_imputado = mejor_promedio(total_facturas) × 14 para precision > 0.
+    Para precision 0, ingreso_imputado queda null (se resuelve en imputar_ingreso).
+    """
 
-    # Filtrar solo filas con datos de facturación
-    df_fact = df.filter(pl.col("id_establecimiento").is_not_null()).select(
+    df_fact = df.select(
         ["id_establecimiento", "numero_ruc", "numero_establecimiento",
          "razon_social", "nombre_fantasia_comercial", "clase_contribuyente",
          "tipo_contribuyente", "actividad_economica",
          "periodo", "numero_facturas", "total_facturas", "ticket_promedio"]
-    )
-
-    # Calcular ingreso_estimado por periodo
-    df_fact = df_fact.with_columns(
-        (pl.col("ticket_promedio") * pl.col("numero_facturas")).alias("ingreso_estimado_periodo")
     )
 
     # Agregar por establecimiento
@@ -102,24 +101,66 @@ def construir_base_procesada(df: pl.DataFrame) -> pl.DataFrame:
         pl.col("tipo_contribuyente").first(),
         pl.col("actividad_economica").first(),
         pl.col("total_facturas").sum().alias("ingreso_reportado"),
-        pl.col("ingreso_estimado_periodo").sum().alias("ingreso_estimado"),
-        # Recopilar datos por periodo para calcular precisión
+        # Recopilar datos por periodo para calcular precisión e imputación
         pl.struct(VARS_FACTURACION).alias("periodos_data"),
         pl.col("periodo").count().alias("num_periodos"),
     )
 
-    # Calcular precisión usando apply
+    # Calcular precisión e ingreso_imputado (trimmed average × 14)
     precision_values = []
+    ingreso_imputado_values = []
     for row in df_agg.iter_rows(named=True):
         periodos = row["periodos_data"]
         prec = calcular_precision_establecimiento(periodos)
         precision_values.append(prec)
 
-    df_agg = df_agg.with_columns(
-        pl.Series("precision", precision_values, dtype=pl.Int8)
-    ).drop("periodos_data")
+        tf_values = [p["total_facturas"] for p in periodos]
+        mejor_avg = calcular_mejor_promedio(tf_values)
+        if mejor_avg is not None and prec > 0:
+            ingreso_imputado_values.append(mejor_avg * TOTAL_PERIODOS)
+        else:
+            ingreso_imputado_values.append(None)
+
+    df_agg = df_agg.with_columns([
+        pl.Series("precision", precision_values, dtype=pl.Int8),
+        pl.Series("ingreso_imputado", ingreso_imputado_values, dtype=pl.Float64),
+    ]).drop("periodos_data")
 
     return df_agg
+
+
+def imputar_ingreso(df: pl.DataFrame) -> pl.DataFrame:
+    """
+    Resuelve ingreso_imputado para precision 0 (donde el trimmed average no es confiable).
+    Usa la mediana de ingreso/periodo por actividad_economica de establecimientos confiables.
+    No modifica precision.
+    """
+    # Referencia: establecimientos con 14 periodos y datos confiables
+    referencia = df.filter(
+        (pl.col("num_periodos") == TOTAL_PERIODOS)
+        & (pl.col("precision") > 0)
+    )
+
+    # Mediana de ingreso/periodo por actividad_economica
+    mediana_grupo = referencia.group_by("actividad_economica").agg(
+        (pl.col("ingreso_reportado") / TOTAL_PERIODOS).median().alias("mediana_ingreso_periodo")
+    )
+
+    # Mediana global como fallback
+    mediana_global = referencia["ingreso_reportado"].median() / TOTAL_PERIODOS
+
+    df = df.join(mediana_grupo, on="actividad_economica", how="left")
+    df = df.with_columns(
+        pl.col("mediana_ingreso_periodo").fill_null(mediana_global)
+    )
+
+    # Solo rellenar los nulls (precision 0)
+    df = df.with_columns(
+        pl.col("ingreso_imputado")
+        .fill_null(pl.col("mediana_ingreso_periodo") * TOTAL_PERIODOS)
+    )
+
+    return df.drop("mediana_ingreso_periodo")
 
 
 def construir_base_filtrada(
@@ -129,7 +170,7 @@ def construir_base_filtrada(
     Aplica filtros y mapea tipo_actividad.
     Filtros:
     - Personas Naturales: clase_contribuyente == 'RIMPE' (RIMPE Negocio Popular)
-    - Sociedades: Pequeñas ($500K-$990K) y medianas ($1M-$5M) por ingreso_reportado e ingreso_estimado
+    - Sociedades: Pequeñas ($500K-$990K) y medianas ($1M-$5M) por ingreso_imputado
     """
     # Mapear tipo_actividad
     df = df_procesada.join(df_actividades, on="actividad_economica", how="left")
@@ -140,73 +181,107 @@ def construir_base_filtrada(
         & (pl.col("clase_contribuyente") == "RIMPE")
     )
 
-    # Filtro Sociedades por ingreso_reportado
-    sociedades_por_reportado = df.filter(
+    # Filtro Sociedades por ingreso_imputado
+    sociedades = df.filter(
         (pl.col("tipo_contribuyente") == "SOCIEDAD")
         & (
             # Pequeñas empresas
-            ((pl.col("ingreso_reportado") >= 500_000) & (pl.col("ingreso_reportado") <= 990_000))
+            ((pl.col("ingreso_imputado") >= 500_000) & (pl.col("ingreso_imputado") <= 990_000))
             |
             # Medianas empresas
-            ((pl.col("ingreso_reportado") >= 1_000_000) & (pl.col("ingreso_reportado") <= 5_000_000))
+            ((pl.col("ingreso_imputado") >= 1_000_000) & (pl.col("ingreso_imputado") <= 5_000_000))
         )
-    ).with_columns(pl.lit("ingreso_reportado").alias("filtro_ingreso_usado"))
-
-    # Filtro Sociedades por ingreso_estimado
-    sociedades_por_estimado = df.filter(
-        (pl.col("tipo_contribuyente") == "SOCIEDAD")
-        & (
-            ((pl.col("ingreso_estimado") >= 500_000) & (pl.col("ingreso_estimado") <= 990_000))
-            |
-            ((pl.col("ingreso_estimado") >= 1_000_000) & (pl.col("ingreso_estimado") <= 5_000_000))
-        )
-    ).with_columns(pl.lit("ingreso_estimado").alias("filtro_ingreso_usado"))
-
-    # Personas naturales no tienen filtro de ingreso
-    personas_naturales = personas_naturales.with_columns(
-        pl.lit("no_aplica").alias("filtro_ingreso_usado")
     )
 
-    # Unir ambos resultados (puede haber sobreposición entre reportado y estimado)
     base_filtrada = pl.concat(
-        [personas_naturales, sociedades_por_reportado, sociedades_por_estimado],
+        [personas_naturales, sociedades],
         how="diagonal",
-    ).unique(subset=["id_establecimiento", "filtro_ingreso_usado"])
+    ).unique(subset=["id_establecimiento"])
 
     return base_filtrada
 
 
 def main():
-    print("Leyendo base_consolidada.parquet...")
-    df = pl.read_parquet(BASE_CONSOLIDADA)
-    print(f"  Shape: {df.shape}")
+    print("=" * 60)
+    print("PIPELINE DE CONSTRUCCIÓN DE BASE COMERCIAL")
+    print("=" * 60)
 
-    print("\nConstruyendo base_procesada...")
-    df_procesada = construir_base_procesada(df)
-    print(f"  Establecimientos: {df_procesada.height}")
-    print(f"  Precisión distribución:")
+    # ── Lectura ──────────────────────────────────────────────
+    print("\nLeyendo base_consolidada.parquet...")
+    df = pl.read_parquet(BASE_CONSOLIDADA)
+    rucs_total = df["numero_ruc"].n_unique()
+    print(f"  Shape: {df.shape}")
+    print(f"  RUCs totales: {rucs_total:,}")
+
+    # ── Filtro 1: Establecimientos activos ────────────────────
+    print("\n── Filtro 1: Establecimientos activos ──")
+    rucs_sin_id = df.filter(pl.col("id_establecimiento").is_null())["numero_ruc"].n_unique()
+    df_activos = df.filter(pl.col("id_establecimiento").is_not_null())
+    rucs_con_id = df_activos["numero_ruc"].n_unique()
+    est_con_id = df_activos["id_establecimiento"].n_unique()
+    print(f"  RUCs sin id_establecimiento (sin local activo): {rucs_sin_id:,} ({rucs_sin_id/rucs_total:.1%})")
+    print(f"  RUCs con establecimiento activo: {rucs_con_id:,}")
+    print(f"  Establecimientos activos: {est_con_id:,}")
+
+    # ── Base procesada ───────────────────────────────────────
+    print("\n── Construyendo base_procesada ──")
+    df_procesada = construir_base_procesada(df_activos)
+    print(f"  Establecimientos: {df_procesada.height:,}")
+    print(f"  RUCs: {df_procesada['numero_ruc'].n_unique():,}")
+    print(f"  Precisión (pre-imputación):")
+    print(df_procesada.group_by("precision").agg(pl.len().alias("n")).sort("precision"))
+
+    # ── Imputación de ingreso ─────────────────────────────────
+    print("\n── Imputando ingreso (establ. con < 14 periodos) ──")
+    df_procesada = imputar_ingreso(df_procesada)
+    n_imputados = df_procesada.filter(
+        pl.col("ingreso_reportado") != pl.col("ingreso_imputado")
+    ).height
+    print(f"  Establecimientos imputados: {n_imputados:,}")
+    print(f"  Precisión post-imputación:")
     print(df_procesada.group_by("precision").agg(pl.len().alias("n")).sort("precision"))
     df_procesada.write_parquet(BASE_PROCESADA)
     print(f"  Guardado en {BASE_PROCESADA}")
 
-    print("\nLeyendo actividades_economicas.csv...")
+    # ── Filtro 2: Segmento comercial ─────────────────────────
+    print("\n── Filtro 2: Segmento comercial ──")
+    print("  Criterios: RIMPE (PN) + Sociedades $500K-$5M (por ingreso_imputado)")
     df_actividades = pl.read_csv(ACTIVIDADES_CSV)
-    print(f"  Categorías: {df_actividades['tipo_actividad'].n_unique()}")
-
-    print("\nConstruyendo base_filtrada...")
     df_filtrada = construir_base_filtrada(df_procesada, df_actividades)
-    print(f"  Registros filtrados: {df_filtrada.height}")
-    print(f"  Por filtro_ingreso_usado:")
-    print(df_filtrada.group_by("filtro_ingreso_usado").agg(pl.len().alias("n")).sort("n", descending=True))
-    print(f"  Por tipo_actividad:")
+    est_filtrada = df_filtrada["id_establecimiento"].n_unique()
+    rucs_filtrada = df_filtrada["numero_ruc"].n_unique()
+    descartados = df_procesada.height - est_filtrada
+    print(f"  Establecimientos que pasan: {est_filtrada:,}")
+    print(f"  RUCs que pasan: {rucs_filtrada:,}")
+    print(f"  Descartados: {descartados:,}")
+    print(f"  Por tipo_actividad (top 10):")
     print(
         df_filtrada.group_by("tipo_actividad")
-        .agg(pl.len().alias("n"))
-        .sort("n", descending=True)
-        .head(15)
+        .agg(pl.col("id_establecimiento").n_unique().alias("establecimientos"))
+        .sort("establecimientos", descending=True)
+        .head(10)
     )
     df_filtrada.write_parquet(BASE_FILTRADA)
     print(f"  Guardado en {BASE_FILTRADA}")
+
+    # ── Resumen del embudo ───────────────────────────────────
+    print("\n" + "=" * 70)
+    print("RESUMEN DEL EMBUDO")
+    print("=" * 70)
+    print(f"  {'Etapa':<42} {'RUCs':>10}   {'Establ.':>10}   Base generada")
+    print(f"  {'-'*42} {'-'*10}   {'-'*10}   {'-'*22}")
+    print(f"  {'base_consolidada.parquet':<42} {rucs_total:>10,}   {'—':>10}   base_consolidada")
+    print(f"    ↓ Filtro 1: establ. activos")
+    print(f"  {'Con id_establecimiento':<42} {rucs_con_id:>10,}   {est_con_id:>10,}")
+    print(f"    ↓ Agregación + ingreso + precisión")
+    print(f"  {'base_procesada.parquet':<42} {df_procesada['numero_ruc'].n_unique():>10,}   {df_procesada.height:>10,}   base_procesada")
+    print(f"    ↓ Filtro 2: RIMPE (PN) + Soc. $500K-$5M")
+    print(f"  {'base_filtrada.parquet':<42} {rucs_filtrada:>10,}   {est_filtrada:>10,}   base_filtrada")
+    print(f"  {'-'*42} {'-'*10}   {'-'*10}")
+    pct_rucs = rucs_filtrada / rucs_total * 100
+    pct_est = est_filtrada / est_con_id * 100
+    print(f"  {'Tasa de conversion total':<42} {pct_rucs:>9.2f}%   {pct_est:>9.2f}%")
+    print("=" * 70)
 
 
 if __name__ == "__main__":

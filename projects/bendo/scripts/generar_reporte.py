@@ -12,10 +12,11 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
 from openpyxl.utils import get_column_letter
 
 BASES_DIR = Path(__file__).resolve().parent.parent / "bases"
+ROOT_DIR = Path(__file__).resolve().parent.parent
 BASE_CONSOLIDADA = BASES_DIR / "base_consolidada.parquet"
 BASE_PROCESADA = BASES_DIR / "base_procesada.parquet"
 BASE_FILTRADA = BASES_DIR / "base_filtrada.parquet"
-REPORTE_XLSX = BASES_DIR / "reporte_pipeline.xlsx"
+REPORTE_XLSX = ROOT_DIR / "reporte_pipeline.xlsx"
 
 # ── Estilos ──────────────────────────────────────────────────────────
 FONT_TITULO = Font(name="Calibri", size=14, bold=True, color="FFFFFF")
@@ -44,7 +45,9 @@ BORDER_THIN = Border(
 )
 
 
-def apply_style(cell, font=None, fill=None, alignment=None, border=None, number_format=None):
+def apply_style(
+    cell, font=None, fill=None, alignment=None, border=None, number_format=None
+):
     if font:
         cell.font = font
     if fill:
@@ -63,11 +66,15 @@ def write_title(ws, row, col, text, colspan=1):
     apply_style(cell, FONT_TITULO, FILL_TITULO, ALIGN_CENTER, BORDER_THIN)
     if colspan > 1:
         ws.merge_cells(
-            start_row=row, start_column=col,
-            end_row=row, end_column=col + colspan - 1,
+            start_row=row,
+            start_column=col,
+            end_row=row,
+            end_column=col + colspan - 1,
         )
         for c in range(col + 1, col + colspan):
-            apply_style(ws.cell(row=row, column=c), fill=FILL_TITULO, border=BORDER_THIN)
+            apply_style(
+                ws.cell(row=row, column=c), fill=FILL_TITULO, border=BORDER_THIN
+            )
 
 
 def write_headers(ws, row, headers, start_col=1):
@@ -120,66 +127,89 @@ def generar_reporte():
     pn_proc = df_proc.filter(pl.col("tipo_contribuyente") == "PERSONA NATURAL").height
     soc_proc = df_proc.filter(pl.col("tipo_contribuyente") == "SOCIEDAD").height
 
-    # Clase contribuyente en procesada
-    rimpe_proc = df_proc.filter(pl.col("clase_contribuyente") == "RIMPE").height
+    # Clase contribuyente en procesada (filtrar PN+RIMPE, existen sociedades RIMPE)
+    rimpe_proc = df_proc.filter(
+        (pl.col("tipo_contribuyente") == "PERSONA NATURAL")
+        & (pl.col("clase_contribuyente") == "RIMPE")
+    ).height
     general_proc = df_proc.filter(pl.col("clase_contribuyente") == "GENERAL").height
 
-    # Sociedades por rango
+    # Sociedades por rango (solo ingreso_reportado)
     soc_df = df_proc.filter(pl.col("tipo_contribuyente") == "SOCIEDAD")
     soc_bajo_500k = soc_df.filter(pl.col("ingreso_reportado") < 500_000).height
-    soc_peq_rep = soc_df.filter(
-        (pl.col("ingreso_reportado") >= 500_000) & (pl.col("ingreso_reportado") <= 990_000)
+    soc_peq = soc_df.filter(
+        (pl.col("ingreso_reportado") >= 500_000)
+        & (pl.col("ingreso_reportado") <= 990_000)
     ).height
-    soc_med_rep = soc_df.filter(
-        (pl.col("ingreso_reportado") >= 1_000_000) & (pl.col("ingreso_reportado") <= 5_000_000)
+    soc_med = soc_df.filter(
+        (pl.col("ingreso_reportado") >= 1_000_000)
+        & (pl.col("ingreso_reportado") <= 5_000_000)
     ).height
     soc_sobre_5m = soc_df.filter(pl.col("ingreso_reportado") > 5_000_000).height
-    soc_gap = soc_df.height - soc_bajo_500k - soc_peq_rep - soc_med_rep - soc_sobre_5m
+    soc_gap = soc_df.height - soc_bajo_500k - soc_peq - soc_med - soc_sobre_5m
 
-    # Precisión
-    prec_proc = df_proc.group_by("precision").agg(pl.len().alias("n")).sort("precision")
-    prec_dict = {row["precision"]: row["n"] for row in prec_proc.iter_rows(named=True)}
+    # Precisión — por establecimientos y RUCs
+    prec_proc = df_proc.group_by("precision").agg(
+        pl.len().alias("n_est"),
+        pl.col("numero_ruc").n_unique().alias("n_rucs"),
+    ).sort("precision")
+    prec_proc_dict = {row["precision"]: row for row in prec_proc.iter_rows(named=True)}
 
     prec_filt = df_filt.group_by("precision").agg(
-        pl.col("id_establecimiento").n_unique().alias("n")
+        pl.col("id_establecimiento").n_unique().alias("n_est"),
+        pl.col("numero_ruc").n_unique().alias("n_rucs"),
     ).sort("precision")
-    prec_filt_dict = {row["precision"]: row["n"] for row in prec_filt.iter_rows(named=True)}
+    prec_filt_dict = {row["precision"]: row for row in prec_filt.iter_rows(named=True)}
 
     # Filtrada: segmentos
-    pn_filt = df_filt.filter(pl.col("tipo_contribuyente") == "PERSONA NATURAL")["id_establecimiento"].n_unique()
-    soc_filt_uniq = df_filt.filter(pl.col("tipo_contribuyente") == "SOCIEDAD")["id_establecimiento"].n_unique()
+    pn_filt = df_filt.filter(pl.col("tipo_contribuyente") == "PERSONA NATURAL")[
+        "id_establecimiento"
+    ].n_unique()
 
-    soc_rep_filt = df_filt.filter(pl.col("filtro_ingreso_usado") == "ingreso_reportado")
-    soc_est_filt = df_filt.filter(pl.col("filtro_ingreso_usado") == "ingreso_estimado")
-
-    soc_rep_peq = soc_rep_filt.filter(
-        (pl.col("ingreso_reportado") >= 500_000) & (pl.col("ingreso_reportado") <= 990_000)
+    soc_filt = df_filt.filter(pl.col("tipo_contribuyente") == "SOCIEDAD")
+    soc_filt_peq = soc_filt.filter(
+        (pl.col("ingreso_reportado") >= 500_000)
+        & (pl.col("ingreso_reportado") <= 990_000)
     ).height
-    soc_rep_med = soc_rep_filt.filter(
-        (pl.col("ingreso_reportado") >= 1_000_000) & (pl.col("ingreso_reportado") <= 5_000_000)
-    ).height
-    soc_est_peq = soc_est_filt.filter(
-        (pl.col("ingreso_estimado") >= 500_000) & (pl.col("ingreso_estimado") <= 990_000)
-    ).height
-    soc_est_med = soc_est_filt.filter(
-        (pl.col("ingreso_estimado") >= 1_000_000) & (pl.col("ingreso_estimado") <= 5_000_000)
+    soc_filt_med = soc_filt.filter(
+        (pl.col("ingreso_reportado") >= 1_000_000)
+        & (pl.col("ingreso_reportado") <= 5_000_000)
     ).height
 
-    # Cobertura contactabilidad/balances en consolidada (establ. únicos)
-    est_uniq = est_con_id.unique(subset=["id_establecimiento"])
+    # Cobertura contactabilidad/balances en filtrada
+    # Necesitamos cruzar filtrada con consolidada para obtener las variables de contacto
+    filt_ids = df_filt.select("id_establecimiento").unique()
+    est_filt_detalle = est_con_id.join(filt_ids, on="id_establecimiento", how="inner").unique(
+        subset=["id_establecimiento"]
+    )
+    total_est_filt = est_filt_detalle.height
+    total_rucs_filt = est_filt_detalle["numero_ruc"].n_unique()
+
     cob_contacto = {}
-    for col in ["direccion_completa", "email", "telefono", "telefono_representante", "email_representante"]:
-        non_null = est_uniq.filter(
+    for col in [
+        "direccion_completa",
+        "email",
+        "telefono",
+        "telefono_representante",
+        "email_representante",
+    ]:
+        non_null_est = est_filt_detalle.filter(
             pl.col(col).is_not_null() & (pl.col(col).cast(pl.Utf8) != "")
         ).height
-        cob_contacto[col] = non_null
+        non_null_rucs = est_filt_detalle.filter(
+            pl.col(col).is_not_null() & (pl.col(col).cast(pl.Utf8) != "")
+        )["numero_ruc"].n_unique()
+        cob_contacto[col] = (non_null_est, non_null_rucs)
 
     cob_balance = {}
     for col in ["nombre", "descripcion_rama", "valor_balance_2024"]:
-        non_null = est_uniq.filter(
+        non_null_est = est_filt_detalle.filter(
             pl.col(col).is_not_null() & (pl.col(col).cast(pl.Utf8) != "")
         ).height
-        cob_balance[col] = non_null
+        non_null_rucs = est_filt_detalle.filter(
+            pl.col(col).is_not_null() & (pl.col(col).cast(pl.Utf8) != "")
+        )["numero_ruc"].n_unique()
+        cob_balance[col] = (non_null_est, non_null_rucs)
 
     # Tipo actividad en filtrada
     tipo_act = (
@@ -187,7 +217,6 @@ def generar_reporte():
         .agg(
             pl.col("id_establecimiento").n_unique().alias("establecimientos"),
             pl.col("ingreso_reportado").mean().alias("ingreso_prom_reportado"),
-            pl.col("ingreso_estimado").mean().alias("ingreso_prom_estimado"),
         )
         .sort("establecimientos", descending=True)
     )
@@ -204,61 +233,181 @@ def generar_reporte():
     r = 1
     write_title(ws, r, 1, "REPORTE DE PIPELINE - PROYECTO BENDO", NCOLS)
     r += 1
-    ws.cell(row=r, column=1, value="Embudo de datos: desde la base consolidada hasta la base filtrada final")
+    ws.cell(
+        row=r,
+        column=1,
+        value="Embudo de datos: como se reducen los registros en cada etapa del pipeline",
+    )
     apply_style(ws.cell(row=r, column=1), FONT_SUBTITULO, alignment=ALIGN_LEFT)
     ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=NCOLS)
 
     r += 2
-    write_title(ws, r, 1, "1. EMBUDO GENERAL DE DATOS", NCOLS)
+    write_title(ws, r, 1, "1. EMBUDO DE DATOS", NCOLS)
     r += 1
-    write_headers(ws, r, ["Etapa", "RUCs", "Establecimientos", "% RUCs vs Inicio", "% Establ. vs Anterior", "Motivo de Reduccion"])
-    r += 1
-
-    # Fila 1: Consolidada (todos los RUCs)
-    write_row(ws, r, [
-        "Base Consolidada (todos los RUCs)", rucs_total, "N/A (sin id_establecimiento)",
-        1.0, "", "Base origen con todos los registros del SRI"
-    ], fills=[FILL_LIGHT]*NCOLS, fonts=[FONT_BOLD]+[FONT_NORMAL]*5,
-       fmt=[None, "#,##0", None, "0.0%", None, None])
-    r += 1
-
-    # Fila 2: Consolidada con id_establecimiento
-    write_row(ws, r, [
-        "Con id_establecimiento", rucs_con_id, est_total_cons,
-        pct(rucs_con_id, rucs_total), 1.0,
-        f"{rucs_sin_id:,} RUCs sin info de establecimiento"
-    ], fmt=[None, "#,##0", "#,##0", "0.0%", "0.0%", None])
+    write_headers(
+        ws,
+        r,
+        [
+            "Etapa",
+            "RUCs",
+            "Establecimientos",
+            "% vs Anterior",
+            "Base generada",
+            "Detalle",
+        ],
+    )
     r += 1
 
-    # Fila 3: Procesada
-    write_row(ws, r, [
-        "Base Procesada", rucs_proc, est_proc,
-        pct(rucs_proc, rucs_total), pct(est_proc, est_total_cons),
-        "1 registro con id_establecimiento nulo descartado"
-    ], fills=[FILL_LIGHT]*NCOLS,
-       fmt=[None, "#,##0", "#,##0", "0.0%", "0.0%", None])
+    # Fila 1: base_consolidada
+    write_row(
+        ws,
+        r,
+        [
+            "base_consolidada.parquet",
+            rucs_total,
+            "",
+            "",
+            "base_consolidada",
+            "Todos los contribuyentes registrados en el SRI",
+        ],
+        fills=[FILL_LIGHT] * NCOLS,
+        fonts=[FONT_BOLD] + [FONT_NORMAL] * 5,
+        fmt=[None, "#,##0", None, None, None, None],
+    )
     r += 1
 
-    # Fila 4: Filtrada
-    write_row(ws, r, [
-        "Base Filtrada (establ. unicos)", rucs_filt, est_filt,
-        pct(rucs_filt, rucs_total), pct(est_filt, est_proc),
-        "Solo RIMPE (PN) + Sociedades $500K-$5M"
-    ], fills=[FILL_GREEN]*NCOLS, fonts=[FONT_BOLD]+[FONT_NORMAL]*5,
-       fmt=[None, "#,##0", "#,##0", "0.0%", "0.0%", None])
+    # Fila separador: Filtro 1
+    write_row(
+        ws,
+        r,
+        ["  ↓ Filtro 1: Establecimientos activos", "", "", "", "", ""],
+        fills=[FILL_WHITE] * NCOLS,
+        fonts=[FONT_SUBTITULO] + [FONT_NORMAL] * 5,
+    )
+    r += 1
+
+    # Fila 2: resultado del filtro 1
+    write_row(
+        ws,
+        r,
+        [
+            "Con id_establecimiento",
+            rucs_con_id,
+            est_total_cons,
+            pct(rucs_con_id, rucs_total),
+            "",
+            f"-{rucs_sin_id:,} RUCs sin local activo (0 ventas)",
+        ],
+        fills=[FILL_YELLOW] * NCOLS,
+        fmt=[None, "#,##0", "#,##0", "0.0%", None, None],
+    )
+    r += 1
+
+    # Fila separador: Agregación
+    write_row(
+        ws,
+        r,
+        ["  ↓ Agregacion + ingreso + precision", "", "", "", "", ""],
+        fills=[FILL_WHITE] * NCOLS,
+        fonts=[FONT_SUBTITULO] + [FONT_NORMAL] * 5,
+    )
+    r += 1
+
+    # Fila 3: base_procesada
+    write_row(
+        ws,
+        r,
+        [
+            "base_procesada.parquet",
+            rucs_proc,
+            est_proc,
+            pct(est_proc, est_total_cons),
+            "base_procesada",
+            "1 fila por establecimiento, con ingreso y precision",
+        ],
+        fills=[FILL_LIGHT] * NCOLS,
+        fonts=[FONT_BOLD] + [FONT_NORMAL] * 5,
+        fmt=[None, "#,##0", "#,##0", "0.0%", None, None],
+    )
+    r += 1
+
+    # Fila separador: Filtro 2
+    write_row(
+        ws,
+        r,
+        ["  ↓ Filtro 2: RIMPE (PN) + Sociedades $500K-$5M", "", "", "", "", ""],
+        fills=[FILL_WHITE] * NCOLS,
+        fonts=[FONT_SUBTITULO] + [FONT_NORMAL] * 5,
+    )
+    r += 1
+
+    # Fila 4: base_filtrada
+    reduccion_filt = est_proc - est_filt
+    write_row(
+        ws,
+        r,
+        [
+            "base_filtrada.parquet",
+            rucs_filt,
+            est_filt,
+            pct(est_filt, est_proc),
+            "base_filtrada",
+            f"-{reduccion_filt:,} establ. fuera de segmento",
+        ],
+        fills=[FILL_GREEN] * NCOLS,
+        fonts=[FONT_BOLD] + [FONT_NORMAL] * 5,
+        fmt=[None, "#,##0", "#,##0", "0.0%", None, None],
+    )
+    r += 1
+
+    # Fila: tasa de conversión
+    pct_rucs = pct(rucs_filt, rucs_total)
+    pct_est = pct(est_filt, est_total_cons)
+    write_row(
+        ws,
+        r,
+        ["Tasa de conversion total", pct_rucs, pct_est, "", "", ""],
+        fills=[FILL_HEADER] * NCOLS,
+        fonts=[FONT_HEADER] * NCOLS,
+        fmt=[None, "0.00%", "0.00%", None, None, None],
+    )
 
     # ── SECCIÓN 2: DESGLOSE POR TIPO CONTRIBUYENTE ───────────────────
     r += 3
     write_title(ws, r, 1, "2. DESGLOSE POR TIPO DE CONTRIBUYENTE", NCOLS)
     r += 1
-    write_headers(ws, r, ["Segmento", "Procesada", "Filtrada", "% que pasa filtro", "Motivo filtro", ""])
+    write_headers(
+        ws,
+        r,
+        ["Segmento", "Procesada", "Filtrada", "% que pasa filtro", "Motivo filtro", ""],
+    )
     r += 1
 
     seg_data = [
-        ("PERSONA NATURAL - RIMPE", rimpe_proc, pn_filt, "clase_contribuyente == 'RIMPE'"),
-        ("PERSONA NATURAL - GENERAL", general_proc - rimpe_proc + (pn_proc - general_proc), 0, "No califica (no es RIMPE)"),
-        ("SOCIEDAD - Pequena ($500K-$990K)", soc_peq_rep, soc_rep_peq, "ingreso_reportado en rango"),
-        ("SOCIEDAD - Mediana ($1M-$5M)", soc_med_rep, soc_rep_med, "ingreso_reportado en rango"),
+        (
+            "PERSONA NATURAL - RIMPE",
+            rimpe_proc,
+            pn_filt,
+            "clase_contribuyente == 'RIMPE'",
+        ),
+        (
+            "PERSONA NATURAL - GENERAL",
+            general_proc - rimpe_proc + (pn_proc - general_proc),
+            0,
+            "No califica (no es RIMPE)",
+        ),
+        (
+            "SOCIEDAD - Pequena ($500K-$990K)",
+            soc_peq,
+            soc_filt_peq,
+            "ingreso_reportado en rango",
+        ),
+        (
+            "SOCIEDAD - Mediana ($1M-$5M)",
+            soc_med,
+            soc_filt_med,
+            "ingreso_reportado en rango",
+        ),
         ("SOCIEDAD - Bajo $500K", soc_bajo_500k, 0, "Ingresos insuficientes"),
         ("SOCIEDAD - Sobre $5M", soc_sobre_5m, 0, "Ingresos exceden limite"),
         ("SOCIEDAD - Gap ($990K-$1M)", soc_gap, 0, "Fuera de rangos definidos"),
@@ -266,27 +415,58 @@ def generar_reporte():
 
     for label, proc_n, filt_n, motivo in seg_data:
         fill = FILL_GREEN if filt_n > 0 else FILL_RED
-        write_row(ws, r, [
-            label, proc_n, filt_n, pct(filt_n, proc_n) if proc_n > 0 else 0, motivo, ""
-        ], fills=[fill]*NCOLS,
-           fmt=[None, "#,##0", "#,##0", "0.0%", None, None])
+        write_row(
+            ws,
+            r,
+            [
+                label,
+                proc_n,
+                filt_n,
+                pct(filt_n, proc_n) if proc_n > 0 else 0,
+                motivo,
+                "",
+            ],
+            fills=[fill] * NCOLS,
+            fmt=[None, "#,##0", "#,##0", "0.0%", None, None],
+        )
         r += 1
 
-    # Nota sobre estimado
+    # Nota
     r += 1
-    ws.cell(row=r, column=1, value=(
-        "Nota: Las sociedades tambien se filtran por ingreso_estimado. "
-        f"Por estimado: {soc_est_peq:,} pequenas + {soc_est_med:,} medianas. "
-        f"Total establ. unicos en sociedades filtradas: {soc_filt_uniq:,}"
-    ))
-    apply_style(ws.cell(row=r, column=1), Font(name="Calibri", size=9, italic=True), alignment=ALIGN_LEFT)
+    ws.cell(
+        row=r,
+        column=1,
+        value=(
+            "Nota: Las sociedades se filtran por ingreso_imputado (trimmed average × 14 periodos)."
+        ),
+    )
+    apply_style(
+        ws.cell(row=r, column=1),
+        Font(name="Calibri", size=9, italic=True),
+        alignment=ALIGN_LEFT,
+    )
     ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=NCOLS)
 
     # ── SECCIÓN 3: CALIDAD DE DATOS (PRECISIÓN) ─────────────────────
+    NCOLS_PREC = 8
     r += 3
-    write_title(ws, r, 1, "3. CALIDAD DE DATOS - NIVEL DE PRECISION", NCOLS)
+    write_title(ws, r, 1, "3. CALIDAD DE DATOS - NIVEL DE PRECISION", NCOLS_PREC)
     r += 1
-    write_headers(ws, r, ["Nivel", "Descripcion", "Procesada", "% Procesada", "Filtrada (establ.)", "% Filtrada"])
+    write_headers(
+        ws,
+        r,
+        [
+            "Nivel",
+            "Descripcion",
+            "Establ. Procesada",
+            "RUCs Procesada",
+            "% Procesada",
+            "Establ. Filtrada",
+            "RUCs Filtrada",
+            "% Filtrada",
+        ],
+        start_col=1,
+    )
     r += 1
 
     prec_info = [
@@ -295,87 +475,156 @@ def generar_reporte():
         (2, "Datos completos y estables", FILL_GREEN),
     ]
     for nivel, desc, fill in prec_info:
-        n_proc = prec_dict.get(nivel, 0)
-        n_filt = prec_filt_dict.get(nivel, 0)
-        write_row(ws, r, [
-            f"Nivel {nivel}", desc, n_proc, pct(n_proc, est_proc),
-            n_filt, pct(n_filt, est_filt)
-        ], fills=[fill]*NCOLS,
-           fmt=[None, None, "#,##0", "0.0%", "#,##0", "0.0%"])
+        p = prec_proc_dict.get(nivel, {"n_est": 0, "n_rucs": 0})
+        f = prec_filt_dict.get(nivel, {"n_est": 0, "n_rucs": 0})
+        write_row(
+            ws,
+            r,
+            [
+                f"Nivel {nivel}",
+                desc,
+                p["n_est"],
+                p["n_rucs"],
+                pct(p["n_est"], est_proc),
+                f["n_est"],
+                f["n_rucs"],
+                pct(f["n_est"], est_filt),
+            ],
+            fills=[fill] * NCOLS_PREC,
+            fmt=[None, None, "#,##0", "#,##0", "0.0%", "#,##0", "#,##0", "0.0%"],
+        )
         r += 1
 
-    # ── SECCIÓN 4: COBERTURA DE VARIABLES ────────────────────────────
+    # ── SECCIÓN 4: COBERTURA DE VARIABLES (BASE FILTRADA) ───────────
+    NCOLS_COB = 8
     r += 3
-    write_title(ws, r, 1, "4. COBERTURA DE VARIABLES (BASE CONSOLIDADA - ESTABL. UNICOS)", NCOLS)
+    write_title(
+        ws, r, 1, "4. COBERTURA DE VARIABLES (BASE FILTRADA)", NCOLS_COB
+    )
     r += 1
-    write_headers(ws, r, ["Grupo", "Variable", "Con datos", "Total", "Cobertura %", ""])
+    write_headers(
+        ws,
+        r,
+        [
+            "Grupo",
+            "Variable",
+            "Establ. con datos",
+            "Total Establ.",
+            "% Establ.",
+            "RUCs con datos",
+            "Total RUCs",
+            "% RUCs",
+        ],
+        start_col=1,
+    )
     r += 1
 
     # Contactabilidad
-    for col_name, n in cob_contacto.items():
-        fill = FILL_GREEN if pct(n, est_total_cons) > 0.5 else (FILL_YELLOW if pct(n, est_total_cons) > 0.2 else FILL_RED)
-        write_row(ws, r, [
-            "Contactabilidad", col_name, n, est_total_cons, pct(n, est_total_cons), ""
-        ], fills=[fill]*NCOLS,
-           fmt=[None, None, "#,##0", "#,##0", "0.0%", None])
+    for col_name, (n_est, n_rucs) in cob_contacto.items():
+        fill = (
+            FILL_GREEN
+            if pct(n_est, total_est_filt) > 0.5
+            else (FILL_YELLOW if pct(n_est, total_est_filt) > 0.2 else FILL_RED)
+        )
+        write_row(
+            ws,
+            r,
+            [
+                "Contactabilidad",
+                col_name,
+                n_est,
+                total_est_filt,
+                pct(n_est, total_est_filt),
+                n_rucs,
+                total_rucs_filt,
+                pct(n_rucs, total_rucs_filt),
+            ],
+            fills=[fill] * NCOLS_COB,
+            fmt=[None, None, "#,##0", "#,##0", "0.0%", "#,##0", "#,##0", "0.0%"],
+        )
         r += 1
 
     # Balances
-    for col_name, n in cob_balance.items():
-        fill = FILL_GREEN if pct(n, est_total_cons) > 0.5 else (FILL_YELLOW if pct(n, est_total_cons) > 0.2 else FILL_RED)
-        write_row(ws, r, [
-            "Balances", col_name, n, est_total_cons, pct(n, est_total_cons), ""
-        ], fills=[fill]*NCOLS,
-           fmt=[None, None, "#,##0", "#,##0", "0.0%", None])
+    for col_name, (n_est, n_rucs) in cob_balance.items():
+        fill = (
+            FILL_GREEN
+            if pct(n_est, total_est_filt) > 0.5
+            else (FILL_YELLOW if pct(n_est, total_est_filt) > 0.2 else FILL_RED)
+        )
+        write_row(
+            ws,
+            r,
+            [
+                "Balances",
+                col_name,
+                n_est,
+                total_est_filt,
+                pct(n_est, total_est_filt),
+                n_rucs,
+                total_rucs_filt,
+                pct(n_rucs, total_rucs_filt),
+            ],
+            fills=[fill] * NCOLS_COB,
+            fmt=[None, None, "#,##0", "#,##0", "0.0%", "#,##0", "#,##0", "0.0%"],
+        )
         r += 1
-
-    # Info ventas
-    write_row(ws, r, [
-        "Ventas", "numero_facturas / total_facturas / ticket_promedio",
-        est_total_cons, est_total_cons, 1.0, "100% (14 periodos)"
-    ], fills=[FILL_GREEN]*NCOLS,
-       fmt=[None, None, "#,##0", "#,##0", "0.0%", None])
-    r += 1
-
-    # Info general
-    write_row(ws, r, [
-        "Info General", "ruc / razon_social / clase / tipo / actividad",
-        est_total_cons, est_total_cons, 1.0, "100%"
-    ], fills=[FILL_GREEN]*NCOLS,
-       fmt=[None, None, "#,##0", "#,##0", "0.0%", None])
 
     # ── SECCIÓN 5: DISTRIBUCIÓN POR TIPO DE ACTIVIDAD ────────────────
     r += 3
-    write_title(ws, r, 1, "5. BASE FILTRADA - DISTRIBUCION POR TIPO DE ACTIVIDAD", NCOLS)
+    write_title(
+        ws, r, 1, "5. BASE FILTRADA - DISTRIBUCION POR TIPO DE ACTIVIDAD", NCOLS
+    )
     r += 1
-    write_headers(ws, r, [
-        "Tipo de Actividad", "Establecimientos", "% del Total",
-        "Ingreso Prom. Reportado ($)", "Ingreso Prom. Estimado ($)", ""
-    ])
+    write_headers(
+        ws,
+        r,
+        [
+            "Tipo de Actividad",
+            "Establecimientos",
+            "% del Total",
+            "Ingreso Prom. Reportado ($)",
+            "",
+            "",
+        ],
+    )
     r += 1
 
     for row_data in tipo_act.iter_rows(named=True):
         is_top = row_data["establecimientos"] >= 100
         fill = FILL_LIGHT if is_top else FILL_WHITE
-        write_row(ws, r, [
-            row_data["tipo_actividad"],
-            row_data["establecimientos"],
-            pct(row_data["establecimientos"], est_filt),
-            round(row_data["ingreso_prom_reportado"], 2) if row_data["ingreso_prom_reportado"] else 0,
-            round(row_data["ingreso_prom_estimado"], 2) if row_data["ingreso_prom_estimado"] else 0,
-            "",
-        ], fills=[fill]*NCOLS, fonts=[FONT_BOLD if is_top else FONT_NORMAL]+[FONT_NORMAL]*5,
-           fmt=[None, "#,##0", "0.0%", "$#,##0", "$#,##0", None])
+        write_row(
+            ws,
+            r,
+            [
+                row_data["tipo_actividad"],
+                row_data["establecimientos"],
+                pct(row_data["establecimientos"], est_filt),
+                (
+                    round(row_data["ingreso_prom_reportado"], 2)
+                    if row_data["ingreso_prom_reportado"]
+                    else 0
+                ),
+                "",
+                "",
+            ],
+            fills=[fill] * NCOLS,
+            fonts=[FONT_BOLD if is_top else FONT_NORMAL] + [FONT_NORMAL] * 5,
+            fmt=[None, "#,##0", "0.0%", "$#,##0", None, None],
+        )
         r += 1
 
     # Total
-    write_row(ws, r, [
-        "TOTAL", est_filt, 1.0, "", "", ""
-    ], fills=[FILL_HEADER]*NCOLS, fonts=[FONT_HEADER]*NCOLS,
-       fmt=[None, "#,##0", "0.0%", None, None, None])
+    write_row(
+        ws,
+        r,
+        ["TOTAL", est_filt, 1.0, "", "", ""],
+        fills=[FILL_HEADER] * NCOLS,
+        fonts=[FONT_HEADER] * NCOLS,
+        fmt=[None, "#,##0", "0.0%", None, None, None],
+    )
 
     # ── Ajustar anchos de columna ────────────────────────────────────
-    col_widths = [42, 18, 20, 22, 22, 40]
+    col_widths = [42, 18, 20, 22, 22, 18, 18, 18]
     for i, w in enumerate(col_widths):
         ws.column_dimensions[get_column_letter(i + 1)].width = w
 
