@@ -1,7 +1,7 @@
 """
 construir_base.py
 Genera base_procesada.parquet y base_filtrada.parquet a partir de base_consolidada.parquet.
-Solo usa ingreso_reportado (total_facturas agregado) para filtrar sociedades.
+Usa ingreso_estimado (con imputación de outliers bajos) para filtrar sociedades.
 Python 3.11 / Polars
 """
 
@@ -16,13 +16,15 @@ BASE_FILTRADA = BASES_DIR / "base_filtrada.parquet"
 
 VARS_FACTURACION = ["numero_facturas", "total_facturas", "ticket_promedio"]
 TOTAL_PERIODOS = 14
+UMBRAL_ESTABILIDAD = 0.2
 
 
 def calcular_mejor_promedio(valores: list[float]) -> float | None:
     """
-    Calcula el mejor promedio recortado: el subconjunto de periodos cuyo promedio
-    minimiza la distancia máxima entre el promedio y cada valor del subconjunto.
-    Retorna el promedio del mejor subconjunto, o None si no hay valores.
+    Encuentra el promedio del subconjunto contiguo (ordenado) más grande
+    donde todos los valores están dentro de ±UMBRAL_ESTABILIDAD del promedio.
+    Itera desde k=n hasta k=2, retorna el primero que cumple.
+    Fallback: mediana.
     """
     if not valores:
         return None
@@ -31,31 +33,28 @@ def calcular_mejor_promedio(valores: list[float]) -> float | None:
         return valores[0]
 
     vals_sorted = sorted(valores)
-    mejor_avg = None
-    mejor_max_dist = float("inf")
 
-    # Probar ventanas contiguas de tamaño k (ordenadas) desde n hasta 1
-    for k in range(n, 0, -1):
+    for k in range(n, 1, -1):
         for start in range(n - k + 1):
             subset = vals_sorted[start : start + k]
             avg = sum(subset) / k
+            if avg == 0:
+                continue
             max_dist = max(abs(v - avg) for v in subset)
-            if max_dist < mejor_max_dist:
-                mejor_max_dist = max_dist
-                mejor_avg = avg
-        if mejor_max_dist < 1e-10:
-            break
-    return mejor_avg
+            if max_dist <= avg * UMBRAL_ESTABILIDAD:
+                return avg
+
+    # Fallback: mediana
+    return vals_sorted[n // 2]
 
 
 def calcular_precision_establecimiento(
     periodos_data: list[dict],
 ) -> int:
     """
-    Calcula el nivel de precisión para un establecimiento dado sus datos por periodo.
-    - Nivel 0: algún periodo tiene 0 o nulo en numero_facturas, total_facturas o ticket_promedio
-    - Nivel 1: datos completos pero inestables (algún valor fuera del ±20% del mejor promedio)
-    - Nivel 2: datos completos y estables
+    Calcula calidad de datos por periodo (pre-nivel, sin considerar completitud).
+    Retorna 0 si algún periodo tiene ceros/nulos, 1 si inestable, 2 si estable.
+    El nivel final (0-3) se asigna en construir_base_procesada considerando num_periodos.
     """
     for p in periodos_data:
         for var in VARS_FACTURACION:
@@ -69,8 +68,8 @@ def calcular_precision_establecimiento(
         mejor_avg = calcular_mejor_promedio(valores)
         if mejor_avg is None or mejor_avg == 0:
             return 0
-        rango_inf = mejor_avg * 0.8
-        rango_sup = mejor_avg * 1.2
+        rango_inf = mejor_avg * (1 - UMBRAL_ESTABILIDAD)
+        rango_sup = mejor_avg * (1 + UMBRAL_ESTABILIDAD)
         for v in valores:
             if v < rango_inf or v > rango_sup:
                 return 1
@@ -79,16 +78,23 @@ def calcular_precision_establecimiento(
 
 
 def construir_base_procesada(df: pl.DataFrame) -> pl.DataFrame:
-    """Construye base_procesada con ingreso_reportado, ingreso_imputado y precision.
-    ingreso_imputado = mejor_promedio(total_facturas) × 14 para precision > 0.
-    Para precision 0, ingreso_imputado queda null (se resuelve en imputar_ingreso).
+    """Construye base_procesada con ingreso_estimado y precision.
+    - Precision 1-2: suma de total_facturas por periodo, reemplazando outliers bajos
+      (< mejor_promedio * 0.8) con mejor_promedio.
+    - Precision 0: null (se resuelve en imputar_ingreso con mediana del grupo).
     """
 
     df_fact = df.select(
         ["id_establecimiento", "numero_ruc", "numero_establecimiento",
          "razon_social", "nombre_fantasia_comercial", "clase_contribuyente",
-         "tipo_contribuyente", "actividad_economica",
+         "tipo_contribuyente", "actividad_economica", "direccion_completa",
          "periodo", "numero_facturas", "total_facturas", "ticket_promedio"]
+    )
+
+    # Parsear provincia y canton desde direccion_completa (formato: PROV / CANTON / PARR / DIR)
+    df_fact = df_fact.with_columns(
+        pl.col("direccion_completa").str.split(" / ").list.get(0).str.strip_chars().alias("provincia"),
+        pl.col("direccion_completa").str.split(" / ").list.get(1).str.strip_chars().alias("canton"),
     )
 
     # Agregar por establecimiento
@@ -100,30 +106,48 @@ def construir_base_procesada(df: pl.DataFrame) -> pl.DataFrame:
         pl.col("clase_contribuyente").first(),
         pl.col("tipo_contribuyente").first(),
         pl.col("actividad_economica").first(),
-        pl.col("total_facturas").sum().alias("ingreso_reportado"),
-        # Recopilar datos por periodo para calcular precisión e imputación
+        pl.col("provincia").first(),
+        pl.col("canton").first(),
+        # Recopilar datos por periodo para calcular precisión e ingreso_estimado
         pl.struct(VARS_FACTURACION).alias("periodos_data"),
         pl.col("periodo").count().alias("num_periodos"),
     )
 
-    # Calcular precisión e ingreso_imputado (trimmed average × 14)
+    # Calcular precisión e ingreso_estimado
     precision_values = []
-    ingreso_imputado_values = []
+    ingreso_estimado_values = []
     for row in df_agg.iter_rows(named=True):
         periodos = row["periodos_data"]
-        prec = calcular_precision_establecimiento(periodos)
+        prec_base = calcular_precision_establecimiento(periodos)
+        if prec_base == 0:
+            prec = 0   # datos con ceros/nulos
+        elif row["num_periodos"] < TOTAL_PERIODOS:
+            prec = 1   # incompleto (< 14 periodos)
+        elif prec_base == 1:
+            prec = 2   # completo pero inestable
+        else:
+            prec = 3   # completo y estable
         precision_values.append(prec)
 
         tf_values = [p["total_facturas"] for p in periodos]
-        mejor_avg = calcular_mejor_promedio(tf_values)
-        if mejor_avg is not None and prec > 0:
-            ingreso_imputado_values.append(mejor_avg * TOTAL_PERIODOS)
+        if prec == 0:
+            ingreso_estimado_values.append(None)
+        elif prec in (1, 2):
+            # Imputar outliers bajos para incompletos e inestables
+            mejor_avg = calcular_mejor_promedio(tf_values)
+            if mejor_avg is not None and mejor_avg > 0:
+                rango_inf = mejor_avg * (1 - UMBRAL_ESTABILIDAD)
+                adjusted = [mejor_avg if v < rango_inf else v for v in tf_values]
+                ingreso_estimado_values.append(sum(adjusted))
+            else:
+                ingreso_estimado_values.append(sum(tf_values))
         else:
-            ingreso_imputado_values.append(None)
+            # Precision 3: completo y estable, sin corrección
+            ingreso_estimado_values.append(sum(tf_values))
 
     df_agg = df_agg.with_columns([
         pl.Series("precision", precision_values, dtype=pl.Int8),
-        pl.Series("ingreso_imputado", ingreso_imputado_values, dtype=pl.Float64),
+        pl.Series("ingreso_estimado", ingreso_estimado_values, dtype=pl.Float64),
     ]).drop("periodos_data")
 
     return df_agg
@@ -131,32 +155,29 @@ def construir_base_procesada(df: pl.DataFrame) -> pl.DataFrame:
 
 def imputar_ingreso(df: pl.DataFrame) -> pl.DataFrame:
     """
-    Resuelve ingreso_imputado para precision 0 (donde el trimmed average no es confiable).
-    Usa la mediana de ingreso/periodo por actividad_economica de establecimientos confiables.
+    Resuelve ingreso_estimado null (precision 0) con mediana del grupo.
+    Usa la mediana de ingreso_estimado/periodo por actividad_economica
+    de establecimientos con 14 periodos y precision > 0.
     No modifica precision.
     """
-    # Referencia: establecimientos con 14 periodos y datos confiables
     referencia = df.filter(
         (pl.col("num_periodos") == TOTAL_PERIODOS)
         & (pl.col("precision") > 0)
     )
 
-    # Mediana de ingreso/periodo por actividad_economica
     mediana_grupo = referencia.group_by("actividad_economica").agg(
-        (pl.col("ingreso_reportado") / TOTAL_PERIODOS).median().alias("mediana_ingreso_periodo")
+        (pl.col("ingreso_estimado") / TOTAL_PERIODOS).median().alias("mediana_ingreso_periodo")
     )
 
-    # Mediana global como fallback
-    mediana_global = referencia["ingreso_reportado"].median() / TOTAL_PERIODOS
+    mediana_global = referencia["ingreso_estimado"].median() / TOTAL_PERIODOS
 
     df = df.join(mediana_grupo, on="actividad_economica", how="left")
     df = df.with_columns(
         pl.col("mediana_ingreso_periodo").fill_null(mediana_global)
     )
 
-    # Solo rellenar los nulls (precision 0)
     df = df.with_columns(
-        pl.col("ingreso_imputado")
+        pl.col("ingreso_estimado")
         .fill_null(pl.col("mediana_ingreso_periodo") * TOTAL_PERIODOS)
     )
 
@@ -170,7 +191,7 @@ def construir_base_filtrada(
     Aplica filtros y mapea tipo_actividad.
     Filtros:
     - Personas Naturales: clase_contribuyente == 'RIMPE' (RIMPE Negocio Popular)
-    - Sociedades: Pequeñas ($500K-$990K) y medianas ($1M-$5M) por ingreso_imputado
+    - Sociedades: Pequeñas ($500K-$990K) y medianas ($1M-$5M) por ingreso_estimado
     """
     # Mapear tipo_actividad
     df = df_procesada.join(df_actividades, on="actividad_economica", how="left")
@@ -181,15 +202,15 @@ def construir_base_filtrada(
         & (pl.col("clase_contribuyente") == "RIMPE")
     )
 
-    # Filtro Sociedades por ingreso_imputado
+    # Filtro Sociedades por ingreso_estimado
     sociedades = df.filter(
         (pl.col("tipo_contribuyente") == "SOCIEDAD")
         & (
             # Pequeñas empresas
-            ((pl.col("ingreso_imputado") >= 500_000) & (pl.col("ingreso_imputado") <= 990_000))
+            ((pl.col("ingreso_estimado") >= 500_000) & (pl.col("ingreso_estimado") <= 990_000))
             |
             # Medianas empresas
-            ((pl.col("ingreso_imputado") >= 1_000_000) & (pl.col("ingreso_imputado") <= 5_000_000))
+            ((pl.col("ingreso_estimado") >= 1_000_000) & (pl.col("ingreso_estimado") <= 5_000_000))
         )
     )
 
@@ -231,21 +252,17 @@ def main():
     print(f"  Precisión (pre-imputación):")
     print(df_procesada.group_by("precision").agg(pl.len().alias("n")).sort("precision"))
 
-    # ── Imputación de ingreso ─────────────────────────────────
-    print("\n── Imputando ingreso (establ. con < 14 periodos) ──")
+    # ── Imputación de ingreso (precision 0) ──────────────────
+    print("\n── Imputando ingreso (precision 0 → mediana del grupo) ──")
+    n_nulls = df_procesada.filter(pl.col("ingreso_estimado").is_null()).height
     df_procesada = imputar_ingreso(df_procesada)
-    n_imputados = df_procesada.filter(
-        pl.col("ingreso_reportado") != pl.col("ingreso_imputado")
-    ).height
-    print(f"  Establecimientos imputados: {n_imputados:,}")
-    print(f"  Precisión post-imputación:")
-    print(df_procesada.group_by("precision").agg(pl.len().alias("n")).sort("precision"))
+    print(f"  Establecimientos imputados por mediana: {n_nulls:,}")
     df_procesada.write_parquet(BASE_PROCESADA)
     print(f"  Guardado en {BASE_PROCESADA}")
 
     # ── Filtro 2: Segmento comercial ─────────────────────────
     print("\n── Filtro 2: Segmento comercial ──")
-    print("  Criterios: RIMPE (PN) + Sociedades $500K-$5M (por ingreso_imputado)")
+    print("  Criterios: RIMPE (PN) + Sociedades $500K-$5M (ingreso_estimado)")
     df_actividades = pl.read_csv(ACTIVIDADES_CSV)
     df_filtrada = construir_base_filtrada(df_procesada, df_actividades)
     est_filtrada = df_filtrada["id_establecimiento"].n_unique()

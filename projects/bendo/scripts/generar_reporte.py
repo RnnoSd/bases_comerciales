@@ -14,6 +14,7 @@ from openpyxl.utils import get_column_letter
 BASES_DIR = Path(__file__).resolve().parent.parent / "bases"
 ROOT_DIR = Path(__file__).resolve().parent.parent
 BASE_CONSOLIDADA = BASES_DIR / "base_consolidada.parquet"
+ACTIVIDADES_CSV = BASES_DIR / "actividades_economicas.csv"
 BASE_PROCESADA = BASES_DIR / "base_procesada.parquet"
 BASE_FILTRADA = BASES_DIR / "base_filtrada.parquet"
 REPORTE_XLSX = ROOT_DIR / "reporte_pipeline.xlsx"
@@ -134,18 +135,18 @@ def generar_reporte():
     ).height
     general_proc = df_proc.filter(pl.col("clase_contribuyente") == "GENERAL").height
 
-    # Sociedades por rango (solo ingreso_reportado)
+    # Sociedades por rango (solo ingreso_estimado)
     soc_df = df_proc.filter(pl.col("tipo_contribuyente") == "SOCIEDAD")
-    soc_bajo_500k = soc_df.filter(pl.col("ingreso_reportado") < 500_000).height
+    soc_bajo_500k = soc_df.filter(pl.col("ingreso_estimado") < 500_000).height
     soc_peq = soc_df.filter(
-        (pl.col("ingreso_reportado") >= 500_000)
-        & (pl.col("ingreso_reportado") <= 990_000)
+        (pl.col("ingreso_estimado") >= 500_000)
+        & (pl.col("ingreso_estimado") <= 990_000)
     ).height
     soc_med = soc_df.filter(
-        (pl.col("ingreso_reportado") >= 1_000_000)
-        & (pl.col("ingreso_reportado") <= 5_000_000)
+        (pl.col("ingreso_estimado") >= 1_000_000)
+        & (pl.col("ingreso_estimado") <= 5_000_000)
     ).height
-    soc_sobre_5m = soc_df.filter(pl.col("ingreso_reportado") > 5_000_000).height
+    soc_sobre_5m = soc_df.filter(pl.col("ingreso_estimado") > 5_000_000).height
     soc_gap = soc_df.height - soc_bajo_500k - soc_peq - soc_med - soc_sobre_5m
 
     # Precisión — por establecimientos y RUCs
@@ -168,12 +169,12 @@ def generar_reporte():
 
     soc_filt = df_filt.filter(pl.col("tipo_contribuyente") == "SOCIEDAD")
     soc_filt_peq = soc_filt.filter(
-        (pl.col("ingreso_reportado") >= 500_000)
-        & (pl.col("ingreso_reportado") <= 990_000)
+        (pl.col("ingreso_estimado") >= 500_000)
+        & (pl.col("ingreso_estimado") <= 990_000)
     ).height
     soc_filt_med = soc_filt.filter(
-        (pl.col("ingreso_reportado") >= 1_000_000)
-        & (pl.col("ingreso_reportado") <= 5_000_000)
+        (pl.col("ingreso_estimado") >= 1_000_000)
+        & (pl.col("ingreso_estimado") <= 5_000_000)
     ).height
 
     # Cobertura contactabilidad/balances en filtrada
@@ -212,14 +213,29 @@ def generar_reporte():
         cob_balance[col] = (non_null_est, non_null_rucs)
 
     # Tipo actividad en filtrada
+    df_actividades = pl.read_csv(ACTIVIDADES_CSV)
     tipo_act = (
         df_filt.group_by("tipo_actividad")
         .agg(
             pl.col("id_establecimiento").n_unique().alias("establecimientos"),
-            pl.col("ingreso_reportado").mean().alias("ingreso_prom_reportado"),
+            pl.col("ingreso_estimado").mean().alias("ingreso_prom_estimado"),
         )
         .sort("establecimientos", descending=True)
     )
+
+    # Top 3 ejemplos (descripcion_corta) por tipo_actividad
+    ejemplos_por_tipo = {}
+    for tipo in tipo_act["tipo_actividad"].to_list():
+        top3 = (
+            df_filt.filter(pl.col("tipo_actividad") == tipo)
+            .group_by("actividad_economica")
+            .agg(pl.len().alias("n"))
+            .sort("n", descending=True)
+            .head(3)
+            .join(df_actividades, on="actividad_economica", how="left")
+        )
+        ejemplos = top3["descripcion_corta"].to_list() if "descripcion_corta" in top3.columns else []
+        ejemplos_por_tipo[tipo] = " / ".join(e for e in ejemplos if e)
 
     # ── Crear Excel ──────────────────────────────────────────────────
     wb = Workbook()
@@ -400,13 +416,13 @@ def generar_reporte():
             "SOCIEDAD - Pequena ($500K-$990K)",
             soc_peq,
             soc_filt_peq,
-            "ingreso_reportado en rango",
+            "ingreso_estimado en rango",
         ),
         (
             "SOCIEDAD - Mediana ($1M-$5M)",
             soc_med,
             soc_filt_med,
-            "ingreso_reportado en rango",
+            "ingreso_estimado en rango",
         ),
         ("SOCIEDAD - Bajo $500K", soc_bajo_500k, 0, "Ingresos insuficientes"),
         ("SOCIEDAD - Sobre $5M", soc_sobre_5m, 0, "Ingresos exceden limite"),
@@ -470,9 +486,10 @@ def generar_reporte():
     r += 1
 
     prec_info = [
-        (0, "Datos incompletos (ceros/nulos)", FILL_RED),
-        (1, "Datos completos pero inestables", FILL_YELLOW),
-        (2, "Datos completos y estables", FILL_GREEN),
+        (0, "Datos con ceros/nulos", FILL_RED),
+        (1, "Incompleto (< 14 periodos)", FILL_YELLOW),
+        (2, "Completo pero inestable", FILL_YELLOW),
+        (3, "Completo y estable", FILL_GREEN),
     ]
     for nivel, desc, fill in prec_info:
         p = prec_proc_dict.get(nivel, {"n_est": 0, "n_rucs": 0})
@@ -570,9 +587,10 @@ def generar_reporte():
         r += 1
 
     # ── SECCIÓN 5: DISTRIBUCIÓN POR TIPO DE ACTIVIDAD ────────────────
+    NCOLS_ACT = 5
     r += 3
     write_title(
-        ws, r, 1, "5. BASE FILTRADA - DISTRIBUCION POR TIPO DE ACTIVIDAD", NCOLS
+        ws, r, 1, "5. BASE FILTRADA - DISTRIBUCION POR TIPO DE ACTIVIDAD", NCOLS_ACT
     )
     r += 1
     write_headers(
@@ -582,34 +600,33 @@ def generar_reporte():
             "Tipo de Actividad",
             "Establecimientos",
             "% del Total",
-            "Ingreso Prom. Reportado ($)",
-            "",
-            "",
+            "Ingreso Prom. Estimado ($)",
+            "Ejemplos (top 3 actividades)",
         ],
     )
     r += 1
 
     for row_data in tipo_act.iter_rows(named=True):
+        tipo = row_data["tipo_actividad"]
         is_top = row_data["establecimientos"] >= 100
         fill = FILL_LIGHT if is_top else FILL_WHITE
         write_row(
             ws,
             r,
             [
-                row_data["tipo_actividad"],
+                tipo,
                 row_data["establecimientos"],
                 pct(row_data["establecimientos"], est_filt),
                 (
-                    round(row_data["ingreso_prom_reportado"], 2)
-                    if row_data["ingreso_prom_reportado"]
+                    round(row_data["ingreso_prom_estimado"], 2)
+                    if row_data["ingreso_prom_estimado"]
                     else 0
                 ),
-                "",
-                "",
+                ejemplos_por_tipo.get(tipo, ""),
             ],
-            fills=[fill] * NCOLS,
-            fonts=[FONT_BOLD if is_top else FONT_NORMAL] + [FONT_NORMAL] * 5,
-            fmt=[None, "#,##0", "0.0%", "$#,##0", None, None],
+            fills=[fill] * NCOLS_ACT,
+            fonts=[FONT_BOLD if is_top else FONT_NORMAL] + [FONT_NORMAL] * 4,
+            fmt=[None, "#,##0", "0.0%", "$#,##0", None],
         )
         r += 1
 
@@ -617,19 +634,111 @@ def generar_reporte():
     write_row(
         ws,
         r,
-        ["TOTAL", est_filt, 1.0, "", "", ""],
-        fills=[FILL_HEADER] * NCOLS,
-        fonts=[FONT_HEADER] * NCOLS,
-        fmt=[None, "#,##0", "0.0%", None, None, None],
+        ["TOTAL", est_filt, 1.0, "", ""],
+        fills=[FILL_HEADER] * NCOLS_ACT,
+        fonts=[FONT_HEADER] * NCOLS_ACT,
+        fmt=[None, "#,##0", "0.0%", None, None],
     )
 
     # ── Ajustar anchos de columna ────────────────────────────────────
-    col_widths = [42, 18, 20, 22, 22, 18, 18, 18]
+    col_widths = [42, 18, 20, 22, 22, 18, 18, 80]
     for i, w in enumerate(col_widths):
         ws.column_dimensions[get_column_letter(i + 1)].width = w
 
     # Freeze panes
     ws.freeze_panes = "A2"
+
+    # ── HOJA 2: GLOSARIO DE COLUMNAS (BASE FILTRADA) ─────────────────
+    ws_glos = wb.create_sheet("Glosario")
+    ws_glos.sheet_properties.tabColor = "2E75B6"
+
+    glosario = [
+        ("id_establecimiento", "Identificador único del establecimiento (RUC + número de establecimiento)"),
+        ("numero_ruc", "Registro Único de Contribuyentes del SRI"),
+        ("numero_establecimiento", "Número secuencial del establecimiento dentro del RUC"),
+        ("razon_social", "Nombre legal registrado en el SRI"),
+        ("nombre_fantasia_comercial", "Nombre comercial o de marca del establecimiento"),
+        ("clase_contribuyente", "Clasificación tributaria: RIMPE, GENERAL, ESPECIAL, etc."),
+        ("tipo_contribuyente", "PERSONA NATURAL o SOCIEDAD"),
+        ("actividad_economica", "Código o descripción de la actividad económica principal"),
+        ("provincia", "Provincia donde se ubica el establecimiento (parseada de direccion_completa)"),
+        ("canton", "Cantón donde se ubica el establecimiento (parseado de direccion_completa)"),
+        ("num_periodos", "Cantidad de periodos con datos de facturación (máximo 14)"),
+        ("precision", "Nivel de calidad: 0=ceros/nulos, 1=incompleto (<14 periodos), 2=completo inestable, 3=completo estable"),
+        ("ingreso_estimado",
+         "Ingreso estimado en USD. Precision 1-2: suma de total_facturas por periodo, "
+         "reemplazando outliers bajos (<mejor_promedio×0.8) con el mejor_promedio. "
+         "Precision 0: mediana del grupo (actividad_economica) × 14 periodos."),
+        ("tipo_actividad", "Categoría de actividad económica (mapeada desde actividades_economicas.csv)"),
+    ]
+
+    write_title(ws_glos, 1, 1, "GLOSARIO DE COLUMNAS - BASE FILTRADA", 3)
+    write_headers(ws_glos, 2, ["Columna", "Tipo", "Descripcion"])
+    for i, (col_name, desc) in enumerate(glosario, start=3):
+        fill = FILL_LIGHT if i % 2 == 0 else FILL_WHITE
+        # Inferir tipo de dato
+        tipo = "str"
+        if col_name in ("id_establecimiento", "num_periodos", "precision"):
+            tipo = "int"
+        elif col_name == "ingreso_estimado":
+            tipo = "float"
+        write_row(ws_glos, i, [col_name, tipo, desc], fills=[fill] * 3)
+
+    ws_glos.column_dimensions["A"].width = 28
+    ws_glos.column_dimensions["B"].width = 10
+    ws_glos.column_dimensions["C"].width = 90
+    ws_glos.freeze_panes = "A3"
+
+    # ── HOJA 3: RUCs POR PROVINCIA ─────────────────────────────────
+    ws_prov = wb.create_sheet("RUCs por Provincia")
+    ws_prov.sheet_properties.tabColor = "E2EFDA"
+
+    # Para cada RUC: contar establecimientos por provincia y calcular %
+    ruc_prov = (
+        df_filt.group_by(["numero_ruc", "provincia"])
+        .agg(pl.col("id_establecimiento").n_unique().alias("n_est"))
+    )
+    ruc_total = ruc_prov.group_by("numero_ruc").agg(
+        pl.col("n_est").sum().alias("total_est")
+    )
+    ruc_prov = ruc_prov.join(ruc_total, on="numero_ruc")
+    ruc_prov = ruc_prov.with_columns(
+        (pl.col("n_est") / pl.col("total_est")).alias("pct_est")
+    ).sort(["numero_ruc", "n_est"], descending=[False, True])
+
+    # Pivotar: una fila por RUC, una columna por provincia
+    provincias = sorted(
+        ruc_prov.filter(pl.col("provincia").is_not_null())["provincia"].unique().to_list()
+    )
+
+    write_title(ws_prov, 1, 1, "DISTRIBUCION DE ESTABLECIMIENTOS POR PROVINCIA (% por RUC)", len(provincias) + 2)
+    headers_prov = ["RUC", "Total Establ."] + provincias
+    write_headers(ws_prov, 2, headers_prov)
+
+    # Construir pivot
+    pivot = ruc_prov.pivot(
+        on="provincia", index="numero_ruc", values="pct_est",
+    ).join(ruc_total, on="numero_ruc").sort("total_est", descending=True)
+
+    r_prov = 3
+    for row_data in pivot.iter_rows(named=True):
+        ruc = row_data["numero_ruc"]
+        total = row_data["total_est"]
+        vals = [ruc, total]
+        fmts = [None, "#,##0"]
+        for prov in provincias:
+            v = row_data.get(prov)
+            vals.append(v if v is not None else 0)
+            fmts.append("0.0%")
+        fill = FILL_LIGHT if r_prov % 2 == 0 else FILL_WHITE
+        write_row(ws_prov, r_prov, vals, fills=[fill] * len(vals), fmt=fmts)
+        r_prov += 1
+
+    ws_prov.column_dimensions["A"].width = 18
+    ws_prov.column_dimensions["B"].width = 14
+    for i in range(len(provincias)):
+        ws_prov.column_dimensions[get_column_letter(i + 3)].width = 16
+    ws_prov.freeze_panes = "C3"
 
     # ── Guardar ──────────────────────────────────────────────────────
     wb.save(REPORTE_XLSX)
