@@ -31,7 +31,9 @@ def consolidar(carpeta: Path) -> pl.DataFrame:
     dfs = cargar_parquets(carpeta)
 
     df_info_general = dfs["informacion_general_0"]
-    contactabilidad = dfs["contactabilidad_0"]
+    cedula_representantes = dfs["cedula_representantes_0"].select(
+        "numero_ruc", "cedula_representante_legal"
+    )
 
     # Separar facturas y balances
     dfs_facturas = {k: v for k, v in dfs.items() if "fact" in k}
@@ -50,7 +52,9 @@ def consolidar(carpeta: Path) -> pl.DataFrame:
     consolidado_facturas = consolidado_facturas.with_columns(
         pl.col("numero_ruc").cast(pl.Int64)
     )
-    contactabilidad = contactabilidad.with_columns(pl.col("numero_ruc").cast(pl.Int64))
+    cedula_representantes = cedula_representantes.with_columns(
+        pl.col("numero_ruc").cast(pl.Int64)
+    )
 
     # Joins sucesivos
     df = (
@@ -60,7 +64,26 @@ def consolidar(carpeta: Path) -> pl.DataFrame:
             how="left",
         )
         .join(dfs_balances["balances_0"], on="numero_ruc", how="left")
-        .join(contactabilidad, on="numero_ruc", how="left")
+        .join(cedula_representantes, on="numero_ruc", how="left")
+    )
+
+    # Normalizar cedula_representante_legal a String (10 dígitos con leading zeros)
+    df = df.with_columns(
+        pl.col("cedula_representante_legal")
+        .cast(pl.Int64)
+        .cast(pl.Utf8)
+        .str.zfill(10)
+    )
+
+    # Personas naturales: cédula = RUC (13 dígitos) sin los últimos 3 ("001")
+    df = df.with_columns(
+        pl.when(
+            (pl.col("tipo_contribuyente") == "PERSONA NATURAL")
+            & pl.col("cedula_representante_legal").is_null()
+        )
+        .then(pl.col("numero_ruc").cast(pl.Utf8).str.zfill(13).str.slice(0, 10))
+        .otherwise(pl.col("cedula_representante_legal"))
+        .alias("cedula_representante_legal")
     )
 
     return df

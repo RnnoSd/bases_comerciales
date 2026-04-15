@@ -1,6 +1,6 @@
 {
-  "columna_psv": "id_establecimiento",
-  "placeholder_sql": "rucs_a_buscar",
+  "columna_psv": "numero_ruc",
+  "placeholder_sql": "rucs_seleccionados",
   "consultas": {
     "facturacion.sql": {
       "prefijo_salida": "facturacion",
@@ -16,6 +16,10 @@
     },
     "balances.sql": {
       "prefijo_salida": "balances",
+      "regex_sufijo": ""
+    },
+    "cedula_representantes.sql": {
+      "prefijo_salida": "cedula_representantes",
       "regex_sufijo": ""
     }
   }

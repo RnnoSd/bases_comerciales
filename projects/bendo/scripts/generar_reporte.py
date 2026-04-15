@@ -15,7 +15,7 @@ from openpyxl.utils import get_column_letter
 
 BASES_DIR = Path(__file__).resolve().parent.parent / "bases"
 ROOT_DIR = Path(__file__).resolve().parent.parent
-BASE_PRESENTAR = BASES_DIR / "base_presentar.parquet"
+BASE_PRESENTAR = BASES_DIR / "base_presentar_contactabilidad.parquet"
 RESUMEN_XLSX = ROOT_DIR / "resumen_bendo.xlsx"
 
 # ── Estilos ──────────────────────────────────────────────────────────
@@ -113,10 +113,8 @@ def hoja_resumen(wb, df_pres):
 
     # ── 1. Descriptivos generales ────────────────────────────────────
     n_rucs = df_pres["numero_ruc"].n_unique()
-    n_est = df_pres["id_establecimiento"].n_unique()
-    n_provincias = df_pres["provincia"].n_unique()
-    n_cantones = df_pres["canton"].n_unique()
     n_tipo_act = df_pres["tipo_actividad"].n_unique()
+    n_con_balance = df_pres.filter(pl.col("valor_balance_2024").is_not_null()).height
 
     r += 2
     write_title(ws, r, 1, "1. DESCRIPTIVOS GENERALES", NCOLS)
@@ -126,10 +124,8 @@ def hoja_resumen(wb, df_pres):
 
     stats = [
         ("RUCs unicos", n_rucs, "#,##0"),
-        ("Establecimientos", n_est, "#,##0"),
-        ("Provincias", n_provincias, "#,##0"),
-        ("Cantones", n_cantones, "#,##0"),
         ("Tipos de actividad", n_tipo_act, "#,##0"),
+        ("RUCs con balance 2024", n_con_balance, "#,##0"),
     ]
     for label, val, nf in stats:
         fill = FILL_LIGHT if (r % 2 == 0) else FILL_WHITE
@@ -138,63 +134,99 @@ def hoja_resumen(wb, df_pres):
                   fmt=[None, nf, None, None])
         r += 1
 
-    # ── 2. Ingreso y ticket promedio por tipo_actividad ──────────────
+    # ── 2. Composición por tipo de contribuyente ─────────────────────
     r += 1
-    NCOLS_ACT = 6
-    write_title(ws, r, 1, "2. INGRESO Y TICKET PROMEDIO POR TIPO DE ACTIVIDAD", NCOLS_ACT)
+    NCOLS_TIPO = 4
+    write_title(ws, r, 1, "2. COMPOSICION POR TIPO DE CONTRIBUYENTE", NCOLS_TIPO)
     r += 1
     write_headers(ws, r, [
-        "Tipo de Actividad", "Establecimientos", "% del Total",
-        "Ingreso Prom. Estimado ($)", "Ticket Promedio ($)", "RUCs",
+        "Tipo de Contribuyente", "RUCs", "% del Total", "Ingreso Prom. Estimado ($)",
+    ])
+    r += 1
+
+    tipo_contrib = (
+        df_pres.group_by("tipo_contribuyente")
+        .agg(
+            pl.col("numero_ruc").n_unique().alias("rucs"),
+            pl.col("ingreso_estimado_2025").mean().alias("ingreso_prom"),
+        )
+        .sort("rucs", descending=True)
+    )
+
+    for row_data in tipo_contrib.iter_rows(named=True):
+        fill = FILL_LIGHT if (r % 2 == 0) else FILL_WHITE
+        ingreso = round(row_data["ingreso_prom"], 2) if row_data["ingreso_prom"] else 0
+        write_row(ws, r, [
+            row_data["tipo_contribuyente"],
+            row_data["rucs"],
+            pct(row_data["rucs"], n_rucs),
+            ingreso,
+        ],
+            fills=[fill] * NCOLS_TIPO,
+            fonts=[FONT_BOLD, FONT_NORMAL, FONT_NORMAL, FONT_NORMAL],
+            fmt=[None, "#,##0", "0.0%", "$#,##0.00"],
+        )
+        r += 1
+
+    write_row(ws, r, ["TOTAL", n_rucs, 1.0, round(df_pres["ingreso_estimado_2025"].mean(), 2)],
+              fills=[FILL_HEADER] * NCOLS_TIPO, fonts=[FONT_HEADER] * NCOLS_TIPO,
+              fmt=[None, "#,##0", "0.0%", "$#,##0.00"])
+    r += 1
+
+    # ── 3. Ingreso y ticket promedio por tipo_actividad ──────────────
+    r += 1
+    NCOLS_ACT = 5
+    write_title(ws, r, 1, "3. INGRESO Y TICKET PROMEDIO POR TIPO DE ACTIVIDAD", NCOLS_ACT)
+    r += 1
+    write_headers(ws, r, [
+        "Tipo de Actividad", "RUCs", "% del Total",
+        "Ingreso Prom. Estimado ($)", "Ticket Mediana ($)",
     ])
     r += 1
 
     tipo_act = (
         df_pres.group_by("tipo_actividad")
         .agg(
-            pl.col("id_establecimiento").n_unique().alias("establecimientos"),
             pl.col("numero_ruc").n_unique().alias("rucs"),
-            pl.col("ingreso_estimado").mean().alias("ingreso_prom"),
-            pl.col("ticket_promedio").mean().alias("ticket_prom"),
+            pl.col("ingreso_estimado_2025").mean().alias("ingreso_prom"),
+            pl.col("ticket_promedio_2025").median().alias("ticket_prom"),
         )
-        .sort("establecimientos", descending=True)
+        .sort("rucs", descending=True)
     )
 
     for row_data in tipo_act.iter_rows(named=True):
-        is_top = row_data["establecimientos"] >= 100
+        is_top = row_data["rucs"] >= 100
         fill = FILL_LIGHT if is_top else FILL_WHITE
         ingreso = round(row_data["ingreso_prom"], 2) if row_data["ingreso_prom"] else 0
         ticket = round(row_data["ticket_prom"], 2) if row_data["ticket_prom"] else 0
         write_row(ws, r, [
             row_data["tipo_actividad"],
-            row_data["establecimientos"],
-            pct(row_data["establecimientos"], n_est),
+            row_data["rucs"],
+            pct(row_data["rucs"], n_rucs),
             ingreso,
             ticket,
-            row_data["rucs"],
         ],
             fills=[fill] * NCOLS_ACT,
-            fonts=[FONT_BOLD if is_top else FONT_NORMAL] + [FONT_NORMAL] * 5,
-            fmt=[None, "#,##0", "0.0%", "$#,##0.00", "$#,##0.00", "#,##0"],
+            fonts=[FONT_BOLD if is_top else FONT_NORMAL] + [FONT_NORMAL] * 4,
+            fmt=[None, "#,##0", "0.0%", "$#,##0.00", "$#,##0.00"],
         )
         r += 1
 
     # Total
-    ingreso_total = df_pres["ingreso_estimado"].mean()
-    ticket_total = df_pres["ticket_promedio"].mean()
+    ingreso_total = df_pres["ingreso_estimado_2025"].mean()
+    ticket_total = df_pres["ticket_promedio_2025"].median()
     write_row(ws, r, [
-        "TOTAL", n_est, 1.0,
+        "TOTAL", n_rucs, 1.0,
         round(ingreso_total, 2) if ingreso_total else 0,
         round(ticket_total, 2) if ticket_total else 0,
-        n_rucs,
     ],
         fills=[FILL_HEADER] * NCOLS_ACT,
         fonts=[FONT_HEADER] * NCOLS_ACT,
-        fmt=[None, "#,##0", "0.0%", "$#,##0.00", "$#,##0.00", "#,##0"],
+        fmt=[None, "#,##0", "0.0%", "$#,##0.00", "$#,##0.00"],
     )
 
     # Ajustar anchos
-    col_widths = [38, 20, 16, 28, 22, 14]
+    col_widths = [38, 20, 16, 28, 22]
     for i, w in enumerate(col_widths):
         ws.column_dimensions[get_column_letter(i + 1)].width = w
     ws.freeze_panes = "A2"
@@ -206,19 +238,16 @@ def hoja_glosario(wb):
     ws.sheet_properties.tabColor = "2E75B6"
 
     glosario = [
-        ("id_establecimiento", "int", "Identificador unico del establecimiento (RUC + numero de establecimiento)"),
         ("numero_ruc", "int", "Registro Unico de Contribuyentes del SRI"),
-        ("numero_establecimiento", "int", "Numero secuencial del establecimiento dentro del RUC"),
         ("razon_social", "str", "Nombre legal registrado en el SRI"),
-        ("nombre_fantasia_comercial", "str", "Nombre comercial o de marca del establecimiento"),
+        ("nombre_comercial", "str", "Nombre comercial derivado de los establecimientos (top 3 palabras mas frecuentes)"),
         ("clase_contribuyente", "str", "Clasificacion tributaria: RIMPE, GENERAL, ESPECIAL, etc."),
         ("tipo_contribuyente", "str", "PERSONA NATURAL o SOCIEDAD"),
         ("actividad_economica", "str", "Descripcion de la actividad economica principal (CIIU)"),
-        ("provincia", "str", "Provincia donde se ubica el establecimiento"),
-        ("canton", "str", "Canton donde se ubica el establecimiento"),
-        ("ticket_promedio", "float", "Promedio del valor por factura en USD (media de 14 periodos)"),
-        ("ingreso_estimado", "float",
-         "Ingreso estimado en USD (suma de total_facturas por periodo, "
+        ("valor_balance_2024", "float", "Valor del balance declarado en 2024 (USD)"),
+        ("ticket_promedio_2025", "float", "Promedio del valor por factura en USD (media de todos los establecimientos)"),
+        ("ingreso_estimado_2025", "float",
+         "Ingreso estimado en USD (suma de todos los establecimientos del RUC, "
          "con imputacion de outliers bajos y medianas por grupo)"),
         ("tipo_actividad", "str", "Categoria agrupada de actividad economica"),
         ("descripcion_corta", "str", "Descripcion resumida de la actividad economica"),
@@ -250,9 +279,9 @@ def hoja_base_presentar(wb, df_pres):
         fills = [fill] * len(cols)
         fmts = []
         for i, col in enumerate(cols):
-            if col in ("ingreso_estimado", "ticket_promedio"):
+            if col in ("ingreso_estimado_2025", "ticket_promedio_2025", "valor_balance_2024"):
                 fmts.append("$#,##0.00")
-            elif col in ("id_establecimiento", "numero_ruc", "numero_establecimiento"):
+            elif col == "numero_ruc":
                 fmts.append("0")
             else:
                 fmts.append(None)
@@ -260,11 +289,10 @@ def hoja_base_presentar(wb, df_pres):
 
     # Ajustar anchos
     col_widths_map = {
-        "id_establecimiento": 20, "numero_ruc": 16, "numero_establecimiento": 10,
-        "razon_social": 30, "nombre_fantasia_comercial": 30,
+        "numero_ruc": 16, "razon_social": 30, "nombre_comercial": 30,
         "clase_contribuyente": 16, "tipo_contribuyente": 18,
-        "actividad_economica": 50, "provincia": 18, "canton": 18,
-        "ticket_promedio": 16, "ingreso_estimado": 20,
+        "actividad_economica": 50, "valor_balance_2024": 20,
+        "ticket_promedio_2025": 20, "ingreso_estimado_2025": 22,
         "tipo_actividad": 28, "descripcion_corta": 40,
     }
     for i, col in enumerate(cols):
@@ -278,7 +306,7 @@ def generar_resumen():
     print("Leyendo base_presentar...")
     df_pres = pl.read_parquet(BASE_PRESENTAR)
 
-    print(f"  base_presentar: {df_pres['numero_ruc'].n_unique():,} RUCs, {df_pres.height:,} establecimientos")
+    print(f"  base_presentar: {df_pres['numero_ruc'].n_unique():,} RUCs")
 
     wb = Workbook()
 

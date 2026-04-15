@@ -2,6 +2,7 @@ SELECT
   sri.direccion_completa,
   iess.ruc_empleador AS numero_ruc,
   '' AS email,
+  iess_contacto.cedula_afiliado AS cedula_representante_legal,
   iess.telefono_sucursal AS telefono,
   iess_contacto.telefono_afiliado AS telefono_representante,
   iess_contacto.email_afiliado AS email_representante
