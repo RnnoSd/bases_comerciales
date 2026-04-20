@@ -1,8 +1,14 @@
 # =========================
 # Datos e información generada por proyectos
 # =========================
-projects/*/data/
-projects/*/output/
+projects/data_fact/extraer_data_fact/backups
+projects/data_fact/.env
+projects/bendo/extraer_bendo/backups
+projects/bendo/.env
+projects/retenciones_info/extraer_retenciones_info/backups
+projects/retenciones_info/.env
+projects/categorias_comerciales/extraer_categorias_comerciales/backups
+projects/categorias_comerciales/.env
 
 # =========================
 # Archivos temporales y sistema
@@ -27,4 +33,3 @@ env/
 *.egg-info/
 dist/
 poetry.lock
-projects/

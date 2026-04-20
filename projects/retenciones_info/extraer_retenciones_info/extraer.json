@@ -1,0 +1,18 @@
+{
+  "columna_psv": "rucs-a-buscar",
+  "placeholder_sql": "rucs-a-buscar",
+  "consultas": {
+    "informacion_rucs.sql": {
+      "prefijo_salida": "informacion_rucs",
+      "regex_sufijo": ""
+    },
+    "informacion_rucs_complementaria.sql": {
+      "prefijo_salida": "informacion_rucs_complementaria",
+      "regex_sufijo": ""
+    },
+    "ventas.sql": {
+      "prefijo_salida": "ventas",
+      "regex_sufijo": "\\d{4}_\\d{2}"
+    }
+  }
+}
