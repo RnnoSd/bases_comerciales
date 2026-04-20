@@ -1,5 +1,10 @@
 {
   "columna_psv": "id_establecimiento",
   "placeholder_sql": "rucs_a_buscar",
-  "consultas": {}
+  "consultas": {
+    "base_rucs_sri.sql":{
+      "prefijo_salida": "base_rucs_sri",
+      "regex_sufijo": ""
+    }
+  }
 }
