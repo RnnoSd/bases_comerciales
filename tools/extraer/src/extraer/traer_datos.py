@@ -96,7 +96,8 @@ def guardar_resultados(
 
 
 def _es_query_datos(query: str) -> bool:
-    return query.strip().upper().startswith("SELECT")
+    stripped = query.strip().upper()
+    return stripped.startswith("SELECT") or stripped.startswith("WITH")
 
 
 def _crear_conexion(ruta_credenciales: Path) -> mysql.connector.MySQLConnection:

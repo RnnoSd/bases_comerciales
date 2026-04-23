@@ -21,6 +21,10 @@
     "cedula_representantes.sql": {
       "prefijo_salida": "cedula_representantes",
       "regex_sufijo": ""
+    },
+    "sweet_coffe.sql": {
+      "prefijo_salida": "sweet_coffe",
+      "regex_sufijo": ""
     }
   }
 }
